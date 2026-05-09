@@ -4,6 +4,7 @@ import typer
 from rich.console import Console
 
 from agentcli.agent_loop import AgentLoop
+from agentcli.llm.adapter import DemoAdapter
 from agentcli.notes import make_note_slug, render_note
 from agentcli.runtime import build_runtime
 from agentcli.tools.save_note import save_note
@@ -13,7 +14,7 @@ console = Console()
 
 
 def build_adapter():
-    raise NotImplementedError("Provide a real adapter in a later task")
+    return DemoAdapter()
 
 
 @app.command()
