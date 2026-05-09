@@ -62,4 +62,11 @@ def build_runtime(repo_root: Path) -> RuntimeState:
             },
         ),
     }
-    return RuntimeState(repo_root=config.repo_root, system_prompt=load_system_prompt(), llm=llm, tools=tools)
+    return RuntimeState(
+        repo_root=config.repo_root,
+        system_prompt=load_system_prompt(),
+        llm=llm,
+        max_steps=config.max_steps,
+        read_max_lines=config.read_max_lines,
+        tools=tools,
+    )

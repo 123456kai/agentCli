@@ -59,6 +59,9 @@ class DeepSeekOpenAIAdapter:
                     }
                 ],
             }
+            reasoning_content = getattr(message, "reasoning_content", None)
+            if reasoning_content:
+                assistant_message["reasoning_content"] = reasoning_content
             return {
                 "type": "tool_call",
                 "tool_name": tool_call.function.name,

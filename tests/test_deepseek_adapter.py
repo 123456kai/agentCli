@@ -6,6 +6,7 @@ from agentcli.llm.adapter import DeepSeekOpenAIAdapter
 def test_deepseek_adapter_returns_tool_call(monkeypatch) -> None:
     fake_message = SimpleNamespace(
         content="",
+        reasoning_content="thinking trace",
         tool_calls=[
             SimpleNamespace(
                 id="call_1",
@@ -34,6 +35,7 @@ def test_deepseek_adapter_returns_tool_call(monkeypatch) -> None:
     assert result["type"] == "tool_call"
     assert result["tool_name"] == "search_files"
     assert result["arguments"] == {"pattern": "main.py"}
+    assert result["assistant_message"]["reasoning_content"] == "thinking trace"
 
 
 def test_deepseek_adapter_returns_final_content(monkeypatch) -> None:

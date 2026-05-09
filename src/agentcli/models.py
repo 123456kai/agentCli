@@ -17,7 +17,7 @@ class LLMConfig(BaseModel):
 
 class RuntimeConfig(BaseModel):
     repo_root: Path
-    max_steps: int = Field(default=6, ge=1, le=20)
+    max_steps: int = Field(default=12, ge=1, le=30)
     read_max_lines: int = Field(default=160, ge=20, le=400)
 
 
@@ -25,4 +25,6 @@ class RuntimeState(BaseModel):
     repo_root: Path
     system_prompt: str
     llm: LLMConfig
+    max_steps: int
+    read_max_lines: int
     tools: dict[str, ToolSpec]

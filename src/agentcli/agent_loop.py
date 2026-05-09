@@ -28,8 +28,12 @@ class AgentLoop:
             return grep_text(self.runtime.repo_root, str(arguments["needle"]))
         if tool_name == "read_file":
             path = self.runtime.repo_root / str(arguments["path"])
+            if not path.is_file():
+                return {"error": f"read_file expected a file path, but {path} is not a file."}
             start = int(arguments.get("start", 1))
-            end = int(arguments.get("end", 80))
+            requested_end = int(arguments.get("end", 80))
+            max_end = start + self.runtime.read_max_lines - 1
+            end = min(requested_end, max_end)
             return read_file(path, start=start, end=end)
         if tool_name == "save_note":
             output_dir = self.runtime.repo_root / "notes"
@@ -41,14 +45,14 @@ class AgentLoop:
             {"role": "system", "content": self.runtime.system_prompt},
             {"role": "user", "content": question},
         ]
-        for _ in range(6):
+        for step in range(self.runtime.max_steps):
             response = self.adapter.respond(messages, self._tool_defs())
             if response["type"] == "final":
                 return str(response["content"])
             if response["type"] != "tool_call":
                 raise ValueError(f"Unsupported response type: {response['type']}")
             result = self._execute_tool(str(response["tool_name"]), dict(response["arguments"]))
-            tool_call_id = str(response.get("tool_call_id", f"call_{_}"))
+            tool_call_id = str(response.get("tool_call_id", f"call_{step}"))
             assistant_message = response.get(
                 "assistant_message",
                 {
@@ -69,4 +73,16 @@ class AgentLoop:
             messages.append(dict(assistant_message))
             content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
             messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": content})
-        raise RuntimeError("Agent loop exceeded maximum step count")
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "The tool budget is exhausted. Stop calling tools and provide the best final answer "
+                    "you can from the evidence already gathered. Mention any uncertainty explicitly."
+                ),
+            }
+        )
+        response = self.adapter.respond(messages, [])
+        if response["type"] == "final":
+            return str(response["content"])
+        raise RuntimeError("Agent loop exceeded maximum step count and did not produce a final answer")
