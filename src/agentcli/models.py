@@ -6,6 +6,13 @@ from pydantic import BaseModel, Field
 class ToolSpec(BaseModel):
     name: str
     description: str
+    parameters: dict[str, object]
+
+
+class LLMConfig(BaseModel):
+    api_key: str | None = None
+    base_url: str = "https://api.deepseek.com"
+    model: str = "deepseek-v4-flash"
 
 
 class RuntimeConfig(BaseModel):
@@ -17,4 +24,5 @@ class RuntimeConfig(BaseModel):
 class RuntimeState(BaseModel):
     repo_root: Path
     system_prompt: str
+    llm: LLMConfig
     tools: dict[str, ToolSpec]

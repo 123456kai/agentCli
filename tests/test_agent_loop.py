@@ -39,3 +39,43 @@ def test_demo_adapter_returns_final_answer_after_tool_result(tmp_path: Path) -> 
     loop = AgentLoop(runtime=runtime, adapter=DemoAdapter())
     answer = loop.run("Where is the entry point?")
     assert "Conclusion" in answer
+
+
+def test_agent_loop_appends_assistant_and_tool_messages(tmp_path: Path) -> None:
+    observed_messages: list[dict[str, object]] = []
+
+    class InspectingAdapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def respond(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "type": "tool_call",
+                    "tool_name": "search_files",
+                    "arguments": {"pattern": "main.py"},
+                    "tool_call_id": "call_123",
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_123",
+                                "type": "function",
+                                "function": {"name": "search_files", "arguments": "{\"pattern\":\"main.py\"}"},
+                            }
+                        ],
+                    },
+                }
+            observed_messages.extend(messages)
+            return {"type": "final", "content": "done"}
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    runtime = build_runtime(tmp_path)
+    loop = AgentLoop(runtime=runtime, adapter=InspectingAdapter())
+    loop.run("Where is the entry point?")
+    assert observed_messages[-2]["role"] == "assistant"
+    assert observed_messages[-1]["role"] == "tool"
+    assert observed_messages[-1]["tool_call_id"] == "call_123"

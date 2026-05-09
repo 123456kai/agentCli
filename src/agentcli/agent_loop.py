@@ -1,3 +1,5 @@
+import json
+
 from agentcli.tools import grep_text, read_file, save_note, search_files
 
 
@@ -6,8 +8,18 @@ class AgentLoop:
         self.runtime = runtime
         self.adapter = adapter
 
-    def _tool_defs(self) -> list[dict[str, str]]:
-        return [{"name": spec.name, "description": spec.description} for spec in self.runtime.tools.values()]
+    def _tool_defs(self) -> list[dict[str, object]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": spec.parameters,
+                },
+            }
+            for spec in self.runtime.tools.values()
+        ]
 
     def _execute_tool(self, tool_name: str, arguments: dict[str, object]) -> object:
         if tool_name == "search_files":
@@ -25,7 +37,7 @@ class AgentLoop:
         raise ValueError(f"Unknown tool: {tool_name}")
 
     def run(self, question: str) -> str:
-        messages = [
+        messages: list[dict[str, object]] = [
             {"role": "system", "content": self.runtime.system_prompt},
             {"role": "user", "content": question},
         ]
@@ -36,5 +48,25 @@ class AgentLoop:
             if response["type"] != "tool_call":
                 raise ValueError(f"Unsupported response type: {response['type']}")
             result = self._execute_tool(str(response["tool_name"]), dict(response["arguments"]))
-            messages.append({"role": "tool", "content": f"{response['tool_name']} => {result}"})
+            tool_call_id = str(response.get("tool_call_id", f"call_{_}"))
+            assistant_message = response.get(
+                "assistant_message",
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": str(response["tool_name"]),
+                                "arguments": json.dumps(response["arguments"]),
+                            },
+                        }
+                    ],
+                },
+            )
+            messages.append(dict(assistant_message))
+            content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+            messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": content})
         raise RuntimeError("Agent loop exceeded maximum step count")
