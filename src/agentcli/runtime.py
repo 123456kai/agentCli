@@ -1,63 +1,138 @@
 import os
 from pathlib import Path
 
+from agentcli.config import AgentCliConfig
 from agentcli.models import LLMConfig, RuntimeConfig, RuntimeState, ToolSpec
 from agentcli.prompts import load_system_prompt
+from agentcli.repo_guard import MAX_LINES
 
 
-def build_runtime(repo_root: Path) -> RuntimeState:
+def build_runtime(
+    repo_root: Path,
+    model: str | None = None,
+    base_url: str | None = None,
+    max_steps: int | None = None,
+    read_max_lines: int | None = None,
+) -> RuntimeState:
     resolved = repo_root.resolve()
     config = RuntimeConfig(repo_root=resolved)
+
+    # DEEPSEEK_* env vars remain for backward compatibility
+    api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("AGENTCLI_API_KEY")
+    env_model = os.environ.get("DEEPSEEK_MODEL") or os.environ.get("AGENTCLI_MODEL")
+    env_base_url = os.environ.get("DEEPSEEK_BASE_URL") or os.environ.get("AGENTCLI_BASE_URL")
+
     llm = LLMConfig(
-        api_key=os.environ.get("DEEPSEEK_API_KEY"),
-        base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+        api_key=api_key,
+        base_url=base_url or env_base_url or "https://api.deepseek.com",
+        model=model or env_model or "deepseek-v4-flash",
     )
+
     tools = {
         "search_files": ToolSpec(
             name="search_files",
-            description="Search files by glob-like pattern.",
+            description="Search for files by path segment (case-insensitive). Use to locate files by partial name or path.",
             parameters={
                 "type": "object",
-                "properties": {"pattern": {"type": "string", "description": "Filename or path fragment to search for."}},
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Path segment to search for (e.g. 'auth.py', 'src/utils'). Case-insensitive substring match.",
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "Optional glob pattern to further filter (e.g. '*.py', '**/*.ts').",
+                    },
+                },
                 "required": ["pattern"],
                 "additionalProperties": False,
             },
         ),
         "grep_text": ToolSpec(
             name="grep_text",
-            description="Search for text in repository files.",
+            description="Search for text in repository files using ripgrep (or Python fallback). Returns matching lines with paths and line numbers.",
             parameters={
                 "type": "object",
-                "properties": {"needle": {"type": "string", "description": "Text to search for in repository files."}},
+                "properties": {
+                    "needle": {
+                        "type": "string",
+                        "description": "Text to search for (literal string, not regex).",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional subdirectory scope (e.g. 'src/').",
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "Optional glob pattern to filter files (e.g. '*.py').",
+                    },
+                    "ignore_case": {
+                        "type": "boolean",
+                        "description": "Case-insensitive search. Default: false.",
+                    },
+                },
                 "required": ["needle"],
                 "additionalProperties": False,
             },
         ),
         "read_file": ToolSpec(
             name="read_file",
-            description="Read a file snippet with line numbers.",
+            description=f"Read a file with absolute line numbers. Max {MAX_LINES} lines, 100KB, and 2000 chars/line. Returns total lines, EOF status, and truncation info.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Relative file path inside the repository."},
-                    "start": {"type": "integer", "description": "Starting line number.", "default": 1},
-                    "end": {"type": "integer", "description": "Ending line number.", "default": 80},
+                    "path": {
+                        "type": "string",
+                        "description": "Relative file path inside the repository.",
+                    },
+                    "line_offset": {
+                        "type": "integer",
+                        "description": "Line to start reading from (1-based). Negative values read from the end (e.g. -100 = last 100 lines). Default: 1.",
+                        "default": 1,
+                    },
+                    "n_lines": {
+                        "type": "integer",
+                        "description": f"Number of lines to read. Default: {MAX_LINES}.",
+                        "default": MAX_LINES,
+                    },
                 },
-                "required": ["path", "start", "end"],
+                "required": ["path"],
                 "additionalProperties": False,
             },
         ),
-        "save_note": ToolSpec(
-            name="save_note",
-            description="Save the final answer as a Markdown note.",
+        "list_directory": ToolSpec(
+            name="list_directory",
+            description="Show a 2-level directory tree to understand project structure. Use before reading files to orient yourself.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "slug": {"type": "string", "description": "File slug for the note."},
-                    "content": {"type": "string", "description": "Markdown note content."},
+                    "path": {
+                        "type": "string",
+                        "description": "Subdirectory to list. Omit or use empty string for repo root.",
+                        "default": "",
+                    },
                 },
-                "required": ["slug", "content"],
+                "additionalProperties": False,
+            },
+        ),
+        "read_multiple_files": ToolSpec(
+            name="read_multiple_files",
+            description="Read up to 10 short files at once with a total 50KB budget. Useful for reading related files together.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of relative file paths to read.",
+                    },
+                    "line_offset": {
+                        "type": "integer",
+                        "description": "Line to start reading from for all files. Default: 1.",
+                        "default": 1,
+                    },
+                },
+                "required": ["paths"],
                 "additionalProperties": False,
             },
         ),
@@ -66,7 +141,7 @@ def build_runtime(repo_root: Path) -> RuntimeState:
         repo_root=config.repo_root,
         system_prompt=load_system_prompt(),
         llm=llm,
-        max_steps=config.max_steps,
-        read_max_lines=config.read_max_lines,
+        max_steps=max_steps if max_steps is not None else config.max_steps,
+        read_max_lines=read_max_lines if read_max_lines is not None else config.read_max_lines,
         tools=tools,
     )

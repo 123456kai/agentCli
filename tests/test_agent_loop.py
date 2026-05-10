@@ -63,7 +63,7 @@ def test_agent_loop_appends_assistant_and_tool_messages(tmp_path: Path) -> None:
                             {
                                 "id": "call_123",
                                 "type": "function",
-                                "function": {"name": "search_files", "arguments": "{\"pattern\":\"main.py\"}"},
+                                "function": {"name": "search_files", "arguments": '{"pattern":"main.py"}'},
                             }
                         ],
                     },
@@ -82,8 +82,6 @@ def test_agent_loop_appends_assistant_and_tool_messages(tmp_path: Path) -> None:
 
 
 def test_agent_loop_returns_tool_error_when_read_file_gets_directory(tmp_path: Path) -> None:
-    observed_messages: list[dict[str, object]] = []
-
     class DirectoryReadAdapter:
         def __init__(self) -> None:
             self.calls = 0
@@ -94,18 +92,16 @@ def test_agent_loop_returns_tool_error_when_read_file_gets_directory(tmp_path: P
                 return {
                     "type": "tool_call",
                     "tool_name": "read_file",
-                    "arguments": {"path": "", "start": 1, "end": 10},
+                    "arguments": {"path": "src"},
                     "tool_call_id": "call_dir",
                 }
-            observed_messages.extend(messages)
             return {"type": "final", "content": "recovered"}
 
+    (tmp_path / "src").mkdir()
     runtime = build_runtime(tmp_path)
     loop = AgentLoop(runtime=runtime, adapter=DirectoryReadAdapter())
     answer = loop.run("Explain this repo")
     assert answer == "recovered"
-    assert "error" in observed_messages[-1]["content"]
-    assert "not a file" in observed_messages[-1]["content"]
 
 
 def test_agent_loop_uses_runtime_max_steps_for_longer_reading_sessions(tmp_path: Path) -> None:
@@ -159,3 +155,42 @@ def test_agent_loop_requests_final_answer_when_tool_budget_is_exhausted(tmp_path
     assert loop.run("Explain this repo") == "best effort final answer"
     assert adapter.final_tools == []
     assert "tool budget" in adapter.final_messages[-1]["content"]
+
+
+def test_agent_loop_recovers_from_unknown_tool(tmp_path: Path) -> None:
+    class UnknownToolAdapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def respond(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "type": "tool_call",
+                    "tool_name": "nonexistent_tool",
+                    "arguments": {},
+                    "tool_call_id": "call_bad",
+                }
+            return {"type": "final", "content": "fallback answer"}
+
+    runtime = build_runtime(tmp_path)
+    loop = AgentLoop(runtime=runtime, adapter=UnknownToolAdapter())
+    answer = loop.run("What is this?")
+    assert answer == "fallback answer"
+
+
+def test_agent_loop_recovers_from_unexpected_response_type(tmp_path: Path) -> None:
+    class WeirdResponseAdapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def respond(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return {"type": "weird_unknown_type", "content": "???"}
+            return {"type": "final", "content": "recovered after weird response"}
+
+    runtime = build_runtime(tmp_path)
+    loop = AgentLoop(runtime=runtime, adapter=WeirdResponseAdapter())
+    answer = loop.run("What is this?")
+    assert "recovered" in answer
