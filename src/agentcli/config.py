@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 class AgentCliConfig(BaseModel):
     model: str = "deepseek-v4-flash"
     base_url: str = "https://api.deepseek.com"
-    max_steps: int = Field(default=12, ge=1, le=30)
+    max_steps: int = Field(default=50, ge=1, le=100)
     read_max_lines: int = Field(default=160, ge=20, le=400)
     grep_head_limit: int = Field(default=30, ge=1, le=200)
     note_output_dir: str = ""

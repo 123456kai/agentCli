@@ -86,7 +86,7 @@ def _build_progress_callback(enabled: bool):
 def ask(
     question: str,
     repo: Path = typer.Option(Path.cwd(), "--repo", help="Repository root directory."),
-    max_steps: int | None = typer.Option(None, "--max-steps", help="Maximum agent steps (1-30)."),
+    max_steps: int | None = typer.Option(None, "--max-steps", help="Maximum agent steps (1-100)."),
     read_max_lines: int | None = typer.Option(None, "--read-max-lines", help="Maximum lines per read_file call."),
     model: str | None = typer.Option(None, "--model", help="Model name override."),
     base_url: str | None = typer.Option(None, "--base-url", help="API base URL override."),
@@ -120,7 +120,7 @@ def ask(
 def note(
     question: str,
     repo: Path = typer.Option(Path.cwd(), "--repo", help="Repository root directory."),
-    max_steps: int | None = typer.Option(None, "--max-steps", help="Maximum agent steps (1-30)."),
+    max_steps: int | None = typer.Option(None, "--max-steps", help="Maximum agent steps (1-100)."),
     read_max_lines: int | None = typer.Option(None, "--read-max-lines", help="Maximum lines per read_file call."),
     model: str | None = typer.Option(None, "--model", help="Model name override."),
     base_url: str | None = typer.Option(None, "--base-url", help="API base URL override."),
@@ -165,7 +165,7 @@ def note(
 @app.command()
 def chat(
     repo: Path = typer.Option(Path.cwd(), "--repo", help="Repository root directory."),
-    max_steps: int | None = typer.Option(None, "--max-steps", help="Maximum agent steps (1-30)."),
+    max_steps: int | None = typer.Option(None, "--max-steps", help="Maximum agent steps (1-100)."),
     read_max_lines: int | None = typer.Option(None, "--read-max-lines", help="Maximum lines per read_file call."),
     model: str | None = typer.Option(None, "--model", help="Model name override."),
     base_url: str | None = typer.Option(None, "--base-url", help="API base URL override."),

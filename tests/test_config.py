@@ -7,7 +7,7 @@ def test_config_defaults() -> None:
     config = AgentCliConfig()
     assert config.model == "deepseek-v4-flash"
     assert config.base_url == "https://api.deepseek.com"
-    assert config.max_steps == 12
+    assert config.max_steps == 50
     assert config.read_max_lines == 160
     assert config.grep_head_limit == 30
 

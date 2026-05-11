@@ -32,7 +32,7 @@ Configuration is resolved in this priority order: **CLI args > environment varia
 | `--repo` | Repository root path | Current directory |
 | `--model` | Model name override | `deepseek-v4-flash` |
 | `--base-url` | API base URL override | `https://api.deepseek.com` |
-| `--max-steps` | Max agent steps (tool calls) | `12` |
+| `--max-steps` | Max agent steps (tool calls) | `50` |
 | `--read-max-lines` | Max lines per `read_file` | `160` |
 | `--format` | Output format: `text` or `json` | `text` |
 | `--explain-tools` | Print tool progress while the agent explores | `false` |
@@ -43,7 +43,7 @@ Configuration is resolved in this priority order: **CLI args > environment varia
 ```bash
 export AGENTCLI_MODEL="deepseek-v4-flash"
 export AGENTCLI_BASE_URL="https://api.deepseek.com"
-export AGENTCLI_MAX_STEPS="12"
+export AGENTCLI_MAX_STEPS="50"
 export AGENTCLI_READ_MAX_LINES="160"
 export AGENTCLI_GREP_HEAD_LIMIT="30"
 export AGENTCLI_NOTE_OUTPUT_DIR="/path/to/notes"

@@ -17,7 +17,7 @@ class LLMConfig(BaseModel):
 
 class RuntimeConfig(BaseModel):
     repo_root: Path
-    max_steps: int = Field(default=12, ge=1, le=30)
+    max_steps: int = Field(default=50, ge=1, le=100)
     read_max_lines: int = Field(default=160, ge=20, le=400)
 
 

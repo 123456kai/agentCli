@@ -150,7 +150,7 @@ def test_agent_loop_requests_final_answer_when_tool_budget_is_exhausted(tmp_path
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "main.py").write_text("print('hi')\n", encoding="utf-8")
     adapter = BudgetHungryAdapter()
-    runtime = build_runtime(tmp_path)
+    runtime = build_runtime(tmp_path, max_steps=12)
     loop = AgentLoop(runtime=runtime, adapter=adapter)
     assert loop.run("Explain this repo") == "best effort final answer"
     assert adapter.final_tools == []
