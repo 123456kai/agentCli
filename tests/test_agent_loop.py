@@ -154,7 +154,7 @@ def test_agent_loop_requests_final_answer_when_tool_budget_is_exhausted(tmp_path
     loop = AgentLoop(runtime=runtime, adapter=adapter)
     assert loop.run("Explain this repo") == "best effort final answer"
     assert adapter.final_tools == []
-    assert "tool budget" in adapter.final_messages[-1]["content"]
+    assert "tool budget" in adapter.final_messages[-2]["content"]
 
 
 def test_agent_loop_recovers_from_unknown_tool(tmp_path: Path) -> None:
@@ -194,3 +194,29 @@ def test_agent_loop_recovers_from_unexpected_response_type(tmp_path: Path) -> No
     loop = AgentLoop(runtime=runtime, adapter=WeirdResponseAdapter())
     answer = loop.run("What is this?")
     assert "recovered" in answer
+
+
+def test_agent_loop_emits_tool_progress_events(tmp_path: Path) -> None:
+    events: list[dict[str, object]] = []
+
+    class ProgressAdapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def respond(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "type": "tool_call",
+                    "tool_name": "search_files",
+                    "arguments": {"pattern": "main.py"},
+                }
+            return {"type": "final", "content": "done"}
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    runtime = build_runtime(tmp_path)
+    loop = AgentLoop(runtime=runtime, adapter=ProgressAdapter(), progress_callback=events.append)
+    assert loop.run("Where is the entry point?") == "done"
+    assert events[0]["tool_name"] == "search_files"
+    assert events[0]["result"]["kind"] == "search_results"

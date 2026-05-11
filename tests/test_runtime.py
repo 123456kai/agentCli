@@ -5,10 +5,31 @@ from agentcli.runtime import build_runtime
 
 def test_build_runtime_loads_repo_and_prompt(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("# demo\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project]
+name = "demo"
+
+[project.scripts]
+demo = "demo.cli:app"
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "demo").mkdir(parents=True)
+    (tmp_path / "src" / "demo" / "cli.py").write_text("import typer\napp = typer.Typer()\n", encoding="utf-8")
     runtime = build_runtime(tmp_path)
     assert runtime.repo_root == tmp_path
     assert "read and understand code" in runtime.system_prompt.lower()
-    assert set(runtime.tools) == {"search_files", "grep_text", "read_file", "list_directory", "read_multiple_files"}
+    assert "project map pre-scan" in runtime.system_prompt.lower()
+    assert "src/demo/cli.py" in runtime.system_prompt
+    assert set(runtime.tools) == {
+        "search_files",
+        "grep_text",
+        "read_file",
+        "list_directory",
+        "read_multiple_files",
+        "trace_flow",
+    }
     assert "save_note" not in runtime.tools
 
 

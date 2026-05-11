@@ -1,12 +1,15 @@
 import json
 
+from agentcli.analysis import parse_analysis_result, trace_python_flow
+from agentcli.session import AnalysisSession
 from agentcli.tools import grep_text, list_directory, read_file, read_multiple_files, search_files
 
 
 class AgentLoop:
-    def __init__(self, runtime, adapter) -> None:
+    def __init__(self, runtime, adapter, progress_callback=None) -> None:
         self.runtime = runtime
         self.adapter = adapter
+        self.progress_callback = progress_callback
 
     def _tool_defs(self) -> list[dict[str, object]]:
         return [
@@ -60,23 +63,26 @@ class AgentLoop:
                     paths,
                     line_offset=int(arguments.get("line_offset", 1)),
                 )
+            if tool_name == "trace_flow":
+                return trace_python_flow(
+                    self.runtime.repo_root,
+                    str(arguments.get("symbol", "")),
+                    path=str(arguments["path"]) if "path" in arguments else None,
+                )
             return {"error": f"Unknown tool: {tool_name}", "kind": "unknown_tool"}
         except Exception as exc:
             return {"error": f"Tool '{tool_name}' failed: {exc}", "kind": "tool_exception"}
 
-    def run(self, question: str) -> str:
-        messages: list[dict[str, object]] = [
-            {"role": "system", "content": self.runtime.system_prompt},
-            {"role": "user", "content": question},
-        ]
-
+    def _run_with_messages(self, messages: list[dict[str, object]]) -> str:
         consecutive_errors = 0
 
         for step in range(self.runtime.max_steps):
             response = self.adapter.respond(messages, self._tool_defs())
 
             if response["type"] == "final":
-                return str(response["content"])
+                answer = str(response["content"])
+                messages.append({"role": "assistant", "content": answer})
+                return answer
 
             if response["type"] != "tool_call":
                 consecutive_errors += 1
@@ -87,7 +93,9 @@ class AgentLoop:
                     })
                     response = self.adapter.respond(messages, [])
                     if response["type"] == "final":
-                        return str(response["content"])
+                        answer = str(response["content"])
+                        messages.append({"role": "assistant", "content": answer})
+                        return answer
                     return "Agent failed to produce a final answer after repeated unexpected responses."
                 messages.append({
                     "role": "user",
@@ -98,6 +106,14 @@ class AgentLoop:
             tool_name = str(response.get("tool_name", ""))
             arguments = dict(response.get("arguments", {}))
             result = self._execute_tool(tool_name, arguments)
+            if self.progress_callback is not None:
+                self.progress_callback(
+                    {
+                        "tool_name": tool_name,
+                        "arguments": arguments,
+                        "result": result,
+                    }
+                )
 
             if "error" in result:
                 consecutive_errors += 1
@@ -137,7 +153,9 @@ class AgentLoop:
                 })
                 response = self.adapter.respond(messages, [])
                 if response["type"] == "final":
-                    return str(response["content"])
+                    answer = str(response["content"])
+                    messages.append({"role": "assistant", "content": answer})
+                    return answer
                 return "Agent failed to produce a final answer after repeated tool errors."
 
         # Budget exhausted
@@ -150,5 +168,35 @@ class AgentLoop:
         })
         response = self.adapter.respond(messages, [])
         if response["type"] == "final":
-            return str(response["content"])
+            answer = str(response["content"])
+            messages.append({"role": "assistant", "content": answer})
+            return answer
         raise RuntimeError("Agent loop exceeded maximum step count and did not produce a final answer")
+
+    def run(self, question: str) -> str:
+        messages: list[dict[str, object]] = [
+            {"role": "system", "content": self.runtime.system_prompt},
+            {"role": "user", "content": question},
+        ]
+        return self._run_with_messages(messages)
+
+    def run_turn(self, session: AnalysisSession, user_message: str) -> str:
+        if session.messages:
+            messages = [dict(message) for message in session.messages]
+        else:
+            messages = [{"role": "system", "content": self.runtime.system_prompt}]
+
+        summary_index: int | None = None
+        if session.turns:
+            summary_index = len(messages)
+            messages.append({"role": "system", "content": session.render_summary()})
+
+        messages.append({"role": "user", "content": user_message})
+        answer = self._run_with_messages(messages)
+        result = parse_analysis_result(answer)
+        session.record_turn(user_message, result)
+
+        if summary_index is not None:
+            messages = messages[:summary_index] + messages[summary_index + 1:]
+        session.messages = messages
+        return answer

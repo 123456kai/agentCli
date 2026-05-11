@@ -54,3 +54,11 @@ def test_list_directory_ignores_hidden_dirs(tmp_path: Path) -> None:
     content = str(result["content"])
     assert "src/" in content
     assert ".git" not in content
+
+
+def test_list_directory_hides_sensitive_entries(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("SECRET=value\n", encoding="utf-8")
+
+    result = list_directory(tmp_path)
+
+    assert ".env" not in str(result["content"])

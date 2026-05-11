@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from agentcli.analysis import render_project_map_summary, scan_project_map
 from agentcli.config import AgentCliConfig
 from agentcli.models import LLMConfig, RuntimeConfig, RuntimeState, ToolSpec
 from agentcli.prompts import load_system_prompt
@@ -136,12 +137,34 @@ def build_runtime(
                 "additionalProperties": False,
             },
         ),
+        "trace_flow": ToolSpec(
+            name="trace_flow",
+            description="Trace a likely Python call chain for a function, class, or method using static analysis. Best for CLI entrypoints and top-level flow questions.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "Function, class, or method symbol to trace (for example 'ask' or 'AgentLoop.run').",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional relative file path that anchors the starting symbol.",
+                    },
+                },
+                "required": ["symbol"],
+                "additionalProperties": False,
+            },
+        ),
     }
+    project_map = scan_project_map(config.repo_root)
+    project_map_summary = render_project_map_summary(project_map)
     return RuntimeState(
         repo_root=config.repo_root,
-        system_prompt=load_system_prompt(),
+        system_prompt=f"{load_system_prompt()}\n\n{project_map_summary}",
         llm=llm,
         max_steps=max_steps if max_steps is not None else config.max_steps,
         read_max_lines=read_max_lines if read_max_lines is not None else config.read_max_lines,
+        project_map_summary=project_map_summary,
         tools=tools,
     )

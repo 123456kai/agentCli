@@ -4,6 +4,7 @@ from pathlib import Path
 from agentcli.repo_guard import (
     enumerate_repo_files,
     is_ignored,
+    is_sensitive_path,
     resolve_safe_path,
 )
 
@@ -88,6 +89,8 @@ def _grep_with_rg(
         path_parts = relative_path.split("/")
         if any(is_ignored(p) for p in path_parts):
             continue
+        if is_sensitive_path(relative_path):
+            continue
 
         matches.append(
             {
@@ -126,6 +129,8 @@ def _grep_with_python(
         if len(matches) >= head_limit:
             break
         if scope and not rel_path.startswith(scope.rstrip("/") + "/"):
+            continue
+        if is_sensitive_path(rel_path):
             continue
         if glob:
             import fnmatch

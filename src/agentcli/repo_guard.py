@@ -12,6 +12,7 @@ IGNORED_NAMES: frozenset[str] = frozenset(
         ".build",
         ".cache",
         ".coverage",
+        ".agentcli",
         ".fleet",
         ".gradle",
         ".idea",
@@ -20,6 +21,7 @@ IGNORED_NAMES: frozenset[str] = frozenset(
         ".ruff_cache",
         ".tox",
         ".venv",
+        ".worktrees",
         ".vs",
         ".vscode",
         ".next",
@@ -145,6 +147,11 @@ def is_sensitive_file(path: Path) -> bool:
     return path.name in SENSITIVE_NAMES
 
 
+def is_sensitive_path(path: str | Path) -> bool:
+    candidate = Path(path)
+    return any(part in SENSITIVE_NAMES for part in candidate.parts if part)
+
+
 def resolve_safe_path(repo_root: Path, user_path: str) -> Path:
     """Resolve *user_path* relative to *repo_root*, rejecting traversal and out-of-repo paths."""
     resolved_root = repo_root.resolve()
@@ -246,6 +253,8 @@ def list_files_git(repo_root: Path) -> list[str] | None:
         parts = entry.split("/")
         if any(is_ignored(p) for p in parts):
             continue
+        if is_sensitive_path(entry):
+            continue
         paths.append(entry)
 
     tracked_set = set(paths)
@@ -254,6 +263,8 @@ def list_files_git(repo_root: Path) -> list[str] | None:
             continue
         parts = entry.split("/")
         if any(is_ignored(p) for p in parts):
+            continue
+        if is_sensitive_path(entry):
             continue
         if entry not in tracked_set:
             paths.append(entry)
@@ -270,5 +281,7 @@ def enumerate_repo_files(repo_root: Path) -> list[str]:
             return git_files
     walk_files = walk_filtered(resolved)
     return sorted(
-        f.resolve().relative_to(resolved).as_posix() for f in walk_files
+        rel_path
+        for rel_path in (f.resolve().relative_to(resolved).as_posix() for f in walk_files)
+        if not is_sensitive_path(rel_path)
     )

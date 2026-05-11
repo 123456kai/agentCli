@@ -21,3 +21,10 @@ def test_grep_text_case_insensitive(tmp_path: Path) -> None:
     target.write_text("LOGIN_HANDLER = True\n", encoding="utf-8")
     result = grep_text(tmp_path, "login", ignore_case=True)
     assert len(result["matches"]) == 1
+
+
+def test_grep_text_skips_sensitive_files(tmp_path: Path) -> None:
+    sensitive = tmp_path / ".env"
+    sensitive.write_text("API_KEY=secret-value\n", encoding="utf-8")
+    result = grep_text(tmp_path, "secret-value", ignore_case=True)
+    assert result["matches"] == []

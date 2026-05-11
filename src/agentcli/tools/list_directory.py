@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agentcli.repo_guard import is_ignored, resolve_safe_path
+from agentcli.repo_guard import is_ignored, is_sensitive_file, resolve_safe_path
 
 ROOT_WIDTH = 30
 CHILD_WIDTH = 10
@@ -31,7 +31,7 @@ def list_directory(repo_root: Path, path: str = "") -> dict[str, object]:
     except OSError as exc:
         return {"error": f"Cannot list '{path or '.'}': {exc}", "kind": "io_error"}
 
-    visible = [e for e in entries if not is_ignored(e.name)]
+    visible = [e for e in entries if not is_ignored(e.name) and not is_sensitive_file(e)]
     shown = visible[:ROOT_WIDTH]
     remaining = len(visible) - len(shown)
 
@@ -52,7 +52,9 @@ def list_directory(repo_root: Path, path: str = "") -> dict[str, object]:
                 lines.append(f"{child_prefix}└── [not readable]")
                 continue
 
-            visible_children = [c for c in child_entries if not is_ignored(c.name)]
+            visible_children = [
+                c for c in child_entries if not is_ignored(c.name) and not is_sensitive_file(c)
+            ]
             shown_children = visible_children[:CHILD_WIDTH]
             child_remaining = len(visible_children) - len(shown_children)
 

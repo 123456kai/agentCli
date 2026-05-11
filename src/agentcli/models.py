@@ -27,4 +27,5 @@ class RuntimeState(BaseModel):
     llm: LLMConfig
     max_steps: int
     read_max_lines: int
+    project_map_summary: str = ""
     tools: dict[str, ToolSpec]

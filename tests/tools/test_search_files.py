@@ -23,3 +23,16 @@ def test_search_files_truncates_at_limit(tmp_path: Path) -> None:
 def test_search_files_empty_pattern(tmp_path: Path) -> None:
     result = search_files(tmp_path, "")
     assert "error" in result
+
+
+def test_search_files_hides_sensitive_paths(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("TOKEN=value\n", encoding="utf-8")
+    result = search_files(tmp_path, ".env")
+    assert result["matches"] == []
+
+
+def test_search_files_hides_agentcli_session_paths(tmp_path: Path) -> None:
+    (tmp_path / ".agentcli" / "sessions").mkdir(parents=True)
+    (tmp_path / ".agentcli" / "sessions" / "latest.json").write_text("{}", encoding="utf-8")
+    result = search_files(tmp_path, ".json")
+    assert result["matches"] == []
