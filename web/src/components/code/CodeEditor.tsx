@@ -9,6 +9,7 @@ type CodeEditorProps = {
   activeFile: SourceFile | null;
   highlightedRange?: HighlightedRange;
   onSelectFile: (path: string) => void;
+  onCloseFile: (path: string) => void;
 };
 
 function languageFor(path: string): string {
@@ -22,7 +23,7 @@ function languageFor(path: string): string {
   return "plaintext";
 }
 
-export function CodeEditor({ openFiles, activeFile, highlightedRange, onSelectFile }: CodeEditorProps) {
+export function CodeEditor({ openFiles, activeFile, highlightedRange, onSelectFile, onCloseFile }: CodeEditorProps) {
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
   const decorationIds = useRef<string[]>([]);
@@ -57,7 +58,7 @@ export function CodeEditor({ openFiles, activeFile, highlightedRange, onSelectFi
 
   return (
     <div className="codeEditor">
-      <FileTabs files={openFiles} activePath={activeFile?.path ?? ""} onSelect={onSelectFile} />
+      <FileTabs files={openFiles} activePath={activeFile?.path ?? ""} onSelect={onSelectFile} onClose={onCloseFile} />
       <div className="breadcrumb">
         <span>{activeFile?.path ?? "No file selected"}</span>
         <span className="muted">{rangeLabel}</span>
@@ -65,7 +66,7 @@ export function CodeEditor({ openFiles, activeFile, highlightedRange, onSelectFi
       <div className="monacoFrame">
         <Editor
           height="100%"
-          theme="vs-dark"
+          theme="vs"
           onMount={handleMount}
           language={activeFile ? languageFor(activeFile.path) : "plaintext"}
           path={activeFile?.path ?? "empty.txt"}

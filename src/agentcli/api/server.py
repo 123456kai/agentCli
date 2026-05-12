@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from agentcli.agent_loop import AgentLoop
-from agentcli.api.schemas import RunRequest, RunResponse
+from agentcli.api.schemas import RunRequest, RunResponse, TourResponse, TourStep
 from agentcli.engine.events import AgentEvent
 from agentcli.llm.adapter import DeepSeekOpenAIAdapter
 from agentcli.repo_guard import enumerate_repo_files
@@ -142,5 +142,69 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
                 "truncated": len(files) > 500,
             }
         return search_files(resolved_repo, pattern)
+
+    _TOUR_PROMPT = """\
+你正在给一位第一次看这个代码库的开发者做导览。请用中文回答。
+
+按以下步骤探索：
+1. 扫描项目结构（list_directory），了解整体布局
+2. 找到并阅读入口文件（CLI 入口、main 函数、app 启动点）
+3. 追踪主流程在代码库中的执行路径
+4. 识别 5-8 个关键文件，解释它们的角色
+5. 为每个文件标注"接下来该看什么"及原因
+
+探索完成后，只返回一个 JSON 对象（不要 markdown，不要额外文字），结构如下：
+{
+  "title": "<项目名> 代码导览",
+  "steps": [
+    {
+      "order": 1,
+      "title": "入口：<简短标签>",
+      "file": "relative/path/to/file.py",
+      "description": "这个文件做什么、为什么重要、能学到什么。控制在2-3句话，中文。",
+      "next_read": {"file": "relative/path/to/next.py", "reason": "因为它被 xxx 调用"},
+      "key_lines": "10-45"
+    }
+  ]
+}
+
+规则：
+- 每一步聚焦一个文件
+- 流程逻辑：入口 → 核心引擎 → 支撑模块 → 配置/工具
+- next_read.file 必须是仓库中真实存在的文件
+- key_lines 是可选的 — 只有需要高亮特定区域时才填
+- 总共 5-8 步
+- 描述用中文，简明易懂，1-2 句话
+- JSON 必须有效 — 使用双引号，不要尾部逗号"""
+
+    @app.post("/api/tour", response_model=TourResponse)
+    def create_tour() -> TourResponse:
+        import json
+
+        runtime = build_runtime(resolved_repo)
+        factory = adapter_factory or (lambda: _default_adapter_factory(runtime))
+        loop = AgentLoop(runtime=runtime, adapter=factory())
+        raw = loop.run(_TOUR_PROMPT)
+
+        try:
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1]
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+            data = json.loads(raw)
+            steps = [TourStep(**s) for s in data.get("steps", [])]
+            return TourResponse(title=data.get("title", "Code Tour"), steps=steps)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return TourResponse(
+                title="Code Tour",
+                steps=[
+                    TourStep(
+                        order=1, title="Tour Overview", file="",
+                        description=raw[:500],
+                        next_read=None, key_lines=None,
+                    )
+                ],
+            )
 
     return app

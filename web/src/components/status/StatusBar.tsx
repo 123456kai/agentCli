@@ -14,6 +14,8 @@ export function StatusBar({ status, eventCount, fileCount, runId }: StatusBarPro
       <span>Events: {eventCount}</span>
       <span>Files: {fileCount}</span>
       <span>Run: {runId || "none"}</span>
+      <span style={{ flex: 1 }} />
+      <span className="muted">Ctrl+Enter 提交 · 右侧 Tab 切换视图</span>
     </>
   );
 }

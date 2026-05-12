@@ -2,12 +2,20 @@ type FileTabsProps = {
   files: string[];
   activePath: string;
   onSelect: (path: string) => void;
+  onClose: (path: string) => void;
 };
 
-export function FileTabs({ files, activePath, onSelect }: FileTabsProps) {
+export function FileTabs({ files, activePath, onSelect, onClose }: FileTabsProps) {
+  if (files.length === 0) {
+    return (
+      <div className="fileTabs">
+        <span className="muted">No file open</span>
+      </div>
+    );
+  }
+
   return (
     <div className="fileTabs">
-      {files.length === 0 ? <span className="muted">No file open</span> : null}
       {files.map((file) => (
         <button
           className={file === activePath ? "fileTab fileTabActive" : "fileTab"}
@@ -15,6 +23,16 @@ export function FileTabs({ files, activePath, onSelect }: FileTabsProps) {
           onClick={() => onSelect(file)}
         >
           {file.split("/").at(-1)}
+          <span
+            className="fileTabClose"
+            title="Close"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose(file);
+            }}
+          >
+            ×
+          </span>
         </button>
       ))}
     </div>
