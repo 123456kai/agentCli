@@ -7,6 +7,7 @@ from rich.console import Console
 from agentcli.agent_loop import AgentLoop
 from agentcli.analysis import parse_analysis_result
 from agentcli.config import resolve_config
+from agentcli.engine.events import AgentEvent, NullEventSink
 from agentcli.llm.adapter import DeepSeekOpenAIAdapter
 from agentcli.notes import make_note_slug, render_note
 from agentcli.runtime import build_runtime
@@ -61,6 +62,37 @@ def _build_runtime_and_adapter(
     return runtime, adapter
 
 
+class _ConsoleEventSink:
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self.fallback = NullEventSink()
+
+    def emit(self, event_type: str, *, run_id: str, **payload: object) -> AgentEvent:
+        event = self.fallback.emit(event_type, run_id=run_id, **payload)
+        if not self.enabled:
+            return event
+        if event_type == "tool_finished":
+            result = dict(payload.get("result", {}))
+            tool_name = str(payload.get("tool_name", "unknown"))
+            kind = str(result.get("kind", "unknown"))
+            extra = []
+            if "path" in result:
+                extra.append(f"path={result['path']}")
+            if "matches" in result and isinstance(result["matches"], list):
+                extra.append(f"matches={len(result['matches'])}")
+            if result.get("truncated"):
+                extra.append("truncated=true")
+            details = f" ({', '.join(extra)})" if extra else ""
+            console.print(f"[dim][tool][/dim] {tool_name} -> {kind}{details}")
+        elif event_type == "file_opened":
+            console.print(f"[dim][file][/dim] {payload.get('path')}")
+        return event
+
+
+def _build_event_sink(enabled: bool):
+    return _ConsoleEventSink(enabled)
+
+
 def _build_progress_callback(enabled: bool):
     if not enabled:
         return None
@@ -99,7 +131,7 @@ def ask(
 
     runtime, adapter = _build_runtime_and_adapter(repo, model, base_url, max_steps, read_max_lines)
 
-    loop = AgentLoop(runtime=runtime, adapter=adapter, progress_callback=_build_progress_callback(explain_tools))
+    loop = AgentLoop(runtime=runtime, adapter=adapter, event_sink=_build_event_sink(explain_tools))
     answer = loop.run(question)
     analysis = parse_analysis_result(answer)
 
@@ -133,7 +165,7 @@ def note(
         raise typer.BadParameter(f"Repository path does not exist or is not a directory: {repo}")
 
     runtime, adapter = _build_runtime_and_adapter(repo, model, base_url, max_steps, read_max_lines)
-    loop = AgentLoop(runtime=runtime, adapter=adapter, progress_callback=_build_progress_callback(explain_tools))
+    loop = AgentLoop(runtime=runtime, adapter=adapter, event_sink=_build_event_sink(explain_tools))
     answer = loop.run(question)
     analysis = parse_analysis_result(answer)
 
@@ -177,7 +209,7 @@ def chat(
         raise typer.BadParameter(f"Repository path does not exist or is not a directory: {repo}")
 
     runtime, adapter = _build_runtime_and_adapter(repo, model, base_url, max_steps, read_max_lines)
-    loop = AgentLoop(runtime=runtime, adapter=adapter, progress_callback=_build_progress_callback(explain_tools))
+    loop = AgentLoop(runtime=runtime, adapter=adapter, event_sink=_build_event_sink(explain_tools))
     store = SessionStore(repo)
 
     if session_ref:
@@ -200,3 +232,20 @@ def chat(
         answer = loop.run_turn(session, user_message)
         store.save(session)
         console.print(answer)
+
+
+@app.command()
+def web(
+    repo: Path = typer.Option(Path.cwd(), "--repo", help="Repository root directory."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host for the local web workbench."),
+    port: int = typer.Option(8765, "--port", help="Port for the local web workbench."),
+) -> None:
+    """Start the local web source-reading workbench."""
+    if not repo.exists() or not repo.is_dir():
+        raise typer.BadParameter(f"Repository path does not exist or is not a directory: {repo}")
+
+    from agentcli.api.server import create_app
+    import uvicorn
+
+    console.print(f"Starting agentCli web workbench at http://{host}:{port}")
+    uvicorn.run(create_app(repo), host=host, port=port)

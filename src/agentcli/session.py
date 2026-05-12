@@ -5,6 +5,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from agentcli.analysis.models import AnalysisResult
+from agentcli.knowledge.models import KnowledgeState
 
 
 class SessionTurn(BaseModel):
@@ -19,6 +20,7 @@ class SessionTurn(BaseModel):
 class AnalysisSession(BaseModel):
     session_id: str
     repo_root: str
+    current_goal: str = ""
     created_at: str
     updated_at: str
     turns: list[SessionTurn] = Field(default_factory=list)
@@ -27,6 +29,7 @@ class AnalysisSession(BaseModel):
     focus_stack: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
     messages: list[dict[str, object]] = Field(default_factory=list)
+    knowledge: KnowledgeState = Field(default_factory=KnowledgeState)
 
     @classmethod
     def new(cls, repo_root: Path) -> "AnalysisSession":
@@ -39,6 +42,8 @@ class AnalysisSession(BaseModel):
         )
 
     def record_turn(self, question: str, result: AnalysisResult) -> None:
+        if not self.current_goal:
+            self.current_goal = question
         self.turns.append(
             SessionTurn(
                 question=question,
@@ -53,9 +58,11 @@ class AnalysisSession(BaseModel):
         if result.conclusion and result.conclusion not in self.claims:
             self.claims.append(result.conclusion)
 
+        evidence_ids: list[str] = []
         for path in result.key_files:
             if path not in self.evidence_index:
                 self.evidence_index.append(path)
+            evidence_ids.append(self.knowledge.add_file_evidence(path).id)
 
         if result.key_files:
             self.focus_stack = [result.key_files[0]]
@@ -63,6 +70,10 @@ class AnalysisSession(BaseModel):
             self.focus_stack = [result.reading_order[0]]
 
         self.open_questions = list(result.uncertainties)
+        self.knowledge.add_claim(result.conclusion, evidence_ids=evidence_ids)
+        self.knowledge.replace_open_questions(result.uncertainties)
+        self.knowledge.replace_next_actions(result.reading_order)
+        self.knowledge.focus_stack = list(self.focus_stack)
         self.updated_at = datetime.now(UTC).isoformat()
 
     def render_summary(self) -> str:

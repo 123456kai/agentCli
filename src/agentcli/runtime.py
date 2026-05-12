@@ -156,6 +156,68 @@ def build_runtime(
                 "additionalProperties": False,
             },
         ),
+        "find_references": ToolSpec(
+            name="find_references",
+            description="Find likely textual references to a Python symbol. Use when you need to understand where a function, class, or variable is used.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "Symbol name to search for.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional relative directory or file scope.",
+                    },
+                },
+                "required": ["symbol"],
+                "additionalProperties": False,
+            },
+        ),
+        "find_definitions": ToolSpec(
+            name="find_definitions",
+            description="Find Python function, async function, or class definitions by symbol name using AST parsing.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "Function, class, or method name to locate.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional relative directory or file scope.",
+                    },
+                },
+                "required": ["symbol"],
+                "additionalProperties": False,
+            },
+        ),
+        "trace_cli_command": ToolSpec(
+            name="trace_cli_command",
+            description="Resolve a Python CLI command from pyproject.toml project.scripts to its module target and source file.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Console script command name, for example 'agentcli'.",
+                    },
+                },
+                "required": ["command"],
+                "additionalProperties": False,
+            },
+        ),
+        "inspect_tests": ToolSpec(
+            name="inspect_tests",
+            description="Inspect repository test layout and list likely test files.",
+            parameters={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        ),
     }
     project_map = scan_project_map(config.repo_root)
     project_map_summary = render_project_map_summary(project_map)

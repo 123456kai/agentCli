@@ -6,3 +6,4 @@ src/*.egg-info/
 /notes/
 .agentcli/
 .worktrees/
+web/node_modules/

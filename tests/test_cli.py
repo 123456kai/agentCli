@@ -12,6 +12,7 @@ def test_help_shows_primary_commands() -> None:
     assert result.exit_code == 0
     assert "ask" in result.stdout
     assert "note" in result.stdout
+    assert "web" in result.stdout
 
 
 def test_ask_requires_question() -> None:

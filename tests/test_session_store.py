@@ -28,6 +28,8 @@ def test_session_store_round_trips_session(tmp_path: Path) -> None:
     assert loaded.session_id == session.session_id
     assert loaded.turns[0].question == "How does this repo work?"
     assert loaded.focus_stack == ["src/cli.py"]
+    assert loaded.knowledge.claims[0].text == "A CLI project."
+    assert loaded.knowledge.evidence[0].path == "src/cli.py"
 
 
 def test_session_store_load_latest_returns_newest_session(tmp_path: Path) -> None:

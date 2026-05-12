@@ -23,11 +23,15 @@ demo = "demo.cli:app"
     assert "project map pre-scan" in runtime.system_prompt.lower()
     assert "src/demo/cli.py" in runtime.system_prompt
     assert set(runtime.tools) == {
+        "find_definitions",
+        "find_references",
         "search_files",
         "grep_text",
         "read_file",
         "list_directory",
         "read_multiple_files",
+        "inspect_tests",
+        "trace_cli_command",
         "trace_flow",
     }
     assert "save_note" not in runtime.tools

@@ -38,3 +38,24 @@ def test_analysis_session_summary_mentions_previous_focus(tmp_path: Path) -> Non
 
     assert "Current focus" in summary
     assert "src/agentcli/cli.py" in summary
+
+
+def test_analysis_session_records_structured_knowledge(tmp_path: Path) -> None:
+    session = AnalysisSession.new(tmp_path / "repo")
+
+    session.record_turn(
+        "How does the CLI start?",
+        AnalysisResult(
+            answer="## Conclusion\nThe CLI entrypoint is agentcli.cli:app.",
+            conclusion="The CLI entrypoint is agentcli.cli:app.",
+            key_files=["pyproject.toml", "src/agentcli/cli.py"],
+            reading_order=["pyproject.toml", "src/agentcli/cli.py"],
+            uncertainties=["Need to inspect runtime wiring."],
+        ),
+    )
+
+    assert session.knowledge.claims[0].text == "The CLI entrypoint is agentcli.cli:app."
+    assert session.knowledge.claims[0].evidence_ids
+    assert session.knowledge.evidence[0].path == "pyproject.toml"
+    assert session.knowledge.open_questions[0].text == "Need to inspect runtime wiring."
+    assert session.knowledge.next_actions[0].text == "Read pyproject.toml"
