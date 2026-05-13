@@ -8,3 +8,4 @@ src/*.egg-info/
 .worktrees/
 web/node_modules/
 .env.local
+.superpowers/
