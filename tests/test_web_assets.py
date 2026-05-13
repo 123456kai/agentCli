@@ -40,6 +40,9 @@ def test_web_client_uses_eventsource_for_live_sse() -> None:
 
     assert "new EventSource" in client
     assert "run_finished" in client
+    assert "getProjectInfo" in client
+    assert "createSession" in client
+    assert "saveAnalysisNote" in client
 
 
 def test_web_app_uses_codex_style_workbench_components() -> None:
@@ -81,6 +84,8 @@ def test_web_app_handles_failure_status_initial_file_listing_and_evidence_ranges
     assert "useEffect" in app
     assert "refreshFiles(\"\")" in app
     assert "current === \"failed\"" in app
+    assert "setSessionId" in app
+    assert "cancelRun" in app
     assert "lineOffset" in client
     assert "line_offset" in client
 

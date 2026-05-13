@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from queue import Queue
+import json
 from pathlib import Path
-from threading import Thread
+from queue import Queue
+from threading import Event, Lock, Thread
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query
@@ -10,15 +11,31 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from agentcli.agent_loop import AgentLoop
-from agentcli.api.schemas import RunRequest, RunResponse, TourResponse, TourStep
+from agentcli.analysis import parse_analysis_result
+from agentcli.api.schemas import (
+    ProjectResponse,
+    RunRequest,
+    RunResponse,
+    SaveNoteRequest,
+    SaveNoteResponse,
+    SessionResponse,
+    TourResponse,
+    TourStep,
+)
+from agentcli.config import resolve_config
 from agentcli.engine.events import AgentEvent
 from agentcli.llm.adapter import DeepSeekOpenAIAdapter
+from agentcli.notes import make_note_slug, render_note
 from agentcli.repo_guard import enumerate_repo_files
 from agentcli.runtime import build_runtime
+from agentcli.session import AnalysisSession
+from agentcli.session_store import SessionStore
 from agentcli.tools.read_file import read_file
+from agentcli.tools.save_note import save_note
 from agentcli.tools.search_files import search_files
 
 WEB_ROOT = Path(__file__).resolve().parents[3] / "web"
+FILE_LIST_LIMIT = 500
 
 
 def _default_adapter_factory(runtime):
@@ -39,13 +56,37 @@ def _load_web_index() -> str:
     return "<!doctype html><title>agentCli Web</title><div id='root'>agentCli Web</div>"
 
 
+def _build_runtime(repo_root: Path):
+    config = resolve_config(repo_root)
+    return build_runtime(
+        repo_root,
+        model=config.model,
+        base_url=config.base_url,
+        max_steps=config.max_steps,
+        read_max_lines=config.read_max_lines,
+    )
+
+
+def _resolve_notes_dir(repo_root: Path) -> Path:
+    config = resolve_config(repo_root)
+    if not config.note_output_dir:
+        return repo_root / "notes"
+    candidate = Path(config.note_output_dir)
+    if candidate.is_absolute():
+        return candidate
+    return repo_root / candidate
+
+
 def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
     app = FastAPI(title="agentCli Web Workbench")
     resolved_repo = repo_root.resolve()
+    session_store = SessionStore(resolved_repo)
     runs: dict[str, "RunStream"] = {}
+    dist_index = WEB_ROOT / "dist" / "index.html"
     dist_assets = WEB_ROOT / "dist" / "assets"
-    if dist_assets.exists():
-        app.mount("/assets", StaticFiles(directory=dist_assets), name="assets")
+    if dist_index.exists():
+        if dist_assets.exists():
+            app.mount("/assets", StaticFiles(directory=dist_assets), name="assets")
     elif WEB_ROOT.exists():
         app.mount("/web", StaticFiles(directory=WEB_ROOT), name="web")
 
@@ -54,49 +95,130 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
             self.events: list[AgentEvent] = []
             self.queue: Queue[AgentEvent | None] = Queue()
             self.answer = ""
+            self.cancel_event = Event()
+            self._lock = Lock()
+            self.terminal_emitted = False
 
         def emit(self, event_type: str, *, run_id: str, **payload: object) -> AgentEvent:
-            event = AgentEvent(type=event_type, run_id=run_id, payload=dict(payload))
-            self.events.append(event)
-            self.queue.put(event)
-            if event.type == "run_finished":
-                self.queue.put(None)
-            return event
+            with self._lock:
+                if event_type == "run_finished":
+                    if self.terminal_emitted:
+                        return AgentEvent(type=event_type, run_id=run_id, payload=dict(payload))
+                    self.terminal_emitted = True
+                event = AgentEvent(type=event_type, run_id=run_id, payload=dict(payload))
+                self.events.append(event)
+                self.queue.put(event)
+                if event.type == "run_finished":
+                    self.queue.put(None)
+                return event
+
+        def cancel(self, run_id: str) -> None:
+            self.cancel_event.set()
+            self.emit("run_finished", run_id=run_id, status="cancelled")
+
+        def is_cancelled(self) -> bool:
+            return self.cancel_event.is_set()
+
+    def _resolve_session(session_id: str | None) -> AnalysisSession:
+        if session_id:
+            session = session_store.load(session_id)
+            if session is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            return session
+        return AnalysisSession.new(resolved_repo)
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return _load_web_index()
+
+    @app.get("/api/project", response_model=ProjectResponse)
+    def get_project() -> ProjectResponse:
+        files = enumerate_repo_files(resolved_repo)
+        runtime = _build_runtime(resolved_repo)
+        return ProjectResponse(
+            repo_root=resolved_repo.as_posix(),
+            name=resolved_repo.name,
+            model=runtime.llm.model,
+            file_count=len(files),
+            truncated=len(files) > FILE_LIST_LIMIT,
+        )
+
+    @app.post("/api/sessions", response_model=SessionResponse)
+    def create_session() -> SessionResponse:
+        session = AnalysisSession.new(resolved_repo)
+        session_store.save(session)
+        return SessionResponse(session_id=session.session_id)
+
+    @app.get("/api/sessions/latest", response_model=SessionResponse)
+    def get_latest_session() -> SessionResponse:
+        session = session_store.load_latest()
+        return SessionResponse(session_id=session.session_id if session else None)
+
+    @app.post("/api/notes", response_model=SaveNoteResponse)
+    def create_note(request: SaveNoteRequest) -> SaveNoteResponse:
+        analysis = parse_analysis_result(request.answer)
+        question = request.title or request.question
+        note_path = save_note(
+            _resolve_notes_dir(resolved_repo),
+            make_note_slug(question),
+            render_note(
+                question,
+                analysis.conclusion,
+                key_files=analysis.key_files,
+                reading_order=analysis.reading_order,
+                uncertainties=analysis.uncertainties,
+            ),
+        )
+        return SaveNoteResponse(note_path=str(note_path))
 
     @app.post("/api/runs", response_model=RunResponse)
     def create_run(request: RunRequest) -> RunResponse:
         run_id = uuid4().hex
         stream = RunStream()
         runs[run_id] = stream
+        session = _resolve_session(request.session_id)
 
         def _worker() -> None:
-            runtime = build_runtime(resolved_repo)
+            runtime = _build_runtime(resolved_repo)
             factory = adapter_factory or (lambda: _default_adapter_factory(runtime))
-            loop = AgentLoop(runtime=runtime, adapter=factory(), event_sink=stream, run_id=run_id)
+            loop = AgentLoop(
+                runtime=runtime,
+                adapter=factory(),
+                event_sink=stream,
+                run_id=run_id,
+                should_cancel=stream.is_cancelled,
+            )
             try:
-                stream.answer = loop.run(request.question)
+                stream.answer = loop.run_turn(session, request.question)
+                session_store.save(session)
             except Exception as exc:
+                if stream.is_cancelled():
+                    return
                 stream.emit("run_error", run_id=run_id, error=str(exc))
                 stream.emit("run_finished", run_id=run_id, status="failed")
 
         Thread(target=_worker, daemon=True).start()
-        return RunResponse(run_id=run_id, answer="")
+        return RunResponse(run_id=run_id, answer="", session_id=session.session_id)
 
     @app.post("/api/runs/sync", response_model=RunResponse)
     def create_run_sync(request: RunRequest) -> RunResponse:
         run_id = uuid4().hex
         stream = RunStream()
         runs[run_id] = stream
-        runtime = build_runtime(resolved_repo)
+        session = _resolve_session(request.session_id)
+        runtime = _build_runtime(resolved_repo)
         factory = adapter_factory or (lambda: _default_adapter_factory(runtime))
-        loop = AgentLoop(runtime=runtime, adapter=factory(), event_sink=stream, run_id=run_id)
-        answer = loop.run(request.question)
+        loop = AgentLoop(
+            runtime=runtime,
+            adapter=factory(),
+            event_sink=stream,
+            run_id=run_id,
+            should_cancel=stream.is_cancelled,
+        )
+        answer = loop.run_turn(session, request.question)
+        session_store.save(session)
         stream.answer = answer
-        return RunResponse(run_id=run_id, answer=answer)
+        return RunResponse(run_id=run_id, answer=answer, session_id=session.session_id)
 
     @app.get("/api/runs/{run_id}/events")
     def run_events(run_id: str) -> StreamingResponse:
@@ -123,6 +245,14 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
 
         return StreamingResponse(_iter_events(), media_type="text/event-stream")
 
+    @app.post("/api/runs/{run_id}/cancel")
+    def cancel_run(run_id: str) -> dict[str, str]:
+        stream = runs.get(run_id)
+        if stream is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        stream.cancel(run_id)
+        return {"status": "cancelled"}
+
     @app.get("/api/file")
     def get_file(path: str = Query(...), line_offset: int = 1, n_lines: int = 1000) -> dict[str, object]:
         result = read_file(resolved_repo, path, line_offset=line_offset, n_lines=n_lines)
@@ -137,9 +267,9 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
             return {
                 "kind": "file_listing",
                 "pattern": "",
-                "matches": files[:500],
+                "matches": files[:FILE_LIST_LIMIT],
                 "total_matches": len(files),
-                "truncated": len(files) > 500,
+                "truncated": len(files) > FILE_LIST_LIMIT,
             }
         return search_files(resolved_repo, pattern)
 
@@ -179,30 +309,32 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
 
     @app.post("/api/tour", response_model=TourResponse)
     def create_tour() -> TourResponse:
-        import json
-
-        runtime = build_runtime(resolved_repo)
+        runtime = _build_runtime(resolved_repo)
         factory = adapter_factory or (lambda: _default_adapter_factory(runtime))
         loop = AgentLoop(runtime=runtime, adapter=factory())
         raw = loop.run(_TOUR_PROMPT)
 
         try:
-            raw = raw.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1]
-                if raw.endswith("```"):
-                    raw = raw[:-3]
-            data = json.loads(raw)
+            payload = raw.strip()
+            if payload.startswith("```"):
+                payload = payload.split("\n", 1)[1]
+                if payload.endswith("```"):
+                    payload = payload[:-3]
+            data = json.loads(payload)
             steps = [TourStep(**s) for s in data.get("steps", [])]
             return TourResponse(title=data.get("title", "Code Tour"), steps=steps)
         except (json.JSONDecodeError, TypeError, ValueError):
             return TourResponse(
                 title="Code Tour",
+                warning="tour_parse_failed",
                 steps=[
                     TourStep(
-                        order=1, title="Tour Overview", file="",
+                        order=1,
+                        title="Tour Overview",
+                        file="",
                         description=raw[:500],
-                        next_read=None, key_lines=None,
+                        next_read=None,
+                        key_lines=None,
                     )
                 ],
             )

@@ -13,4 +13,5 @@ export type TourStep = {
 export type TourData = {
   title: string;
   steps: TourStep[];
+  warning?: string;
 };

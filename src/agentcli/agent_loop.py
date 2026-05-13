@@ -1,5 +1,6 @@
 import json
 from uuid import uuid4
+from collections.abc import Callable
 
 from agentcli.analysis import parse_analysis_result, trace_python_flow
 from agentcli.analysis.symbols import find_definitions, find_references, inspect_tests, trace_cli_command
@@ -16,12 +17,14 @@ class AgentLoop:
         progress_callback=None,
         event_sink: EventSink | None = None,
         run_id: str | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> None:
         self.runtime = runtime
         self.adapter = adapter
         self.progress_callback = progress_callback
         self.event_sink = event_sink or NullEventSink()
         self.run_id = run_id
+        self.should_cancel = should_cancel
 
     def _tool_defs(self) -> list[dict[str, object]]:
         return [
@@ -106,6 +109,14 @@ class AgentLoop:
 
     def _emit(self, run_id: str, event_type: str, **payload: object) -> None:
         self.event_sink.emit(event_type, run_id=run_id, **payload)
+
+    def _is_cancelled(self) -> bool:
+        if self.should_cancel is None:
+            return False
+        try:
+            return bool(self.should_cancel())
+        except Exception:
+            return False
 
     @staticmethod
     def _line_range_from_content(content: str) -> tuple[int | None, int | None]:
@@ -196,7 +207,14 @@ class AgentLoop:
             ],
         )
 
+        if self._is_cancelled():
+            self._emit(run_id, "run_finished", status="cancelled")
+            return "Run cancelled by user."
+
         for step in range(self.runtime.max_steps):
+            if self._is_cancelled():
+                self._emit(run_id, "run_finished", status="cancelled")
+                return "Run cancelled by user."
             response = self.adapter.respond(messages, self._tool_defs())
 
             if response["type"] == "final":
@@ -271,6 +289,10 @@ class AgentLoop:
             messages.append(dict(assistant_message))
             content = json.dumps(result, ensure_ascii=False)
             messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": content})
+
+            if self._is_cancelled():
+                self._emit(run_id, "run_finished", status="cancelled")
+                return "Run cancelled by user."
 
             if consecutive_errors >= 3:
                 messages.append({

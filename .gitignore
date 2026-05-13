@@ -7,3 +7,4 @@ src/*.egg-info/
 .agentcli/
 .worktrees/
 web/node_modules/
+.env.local

@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AgentEvent, EvidenceItem, HighlightedRange, RunStatus, SourceFile } from "./api/events";
-import { readSourceFile, searchProjectFiles, startRun, subscribeRunEvents } from "./api/client";
+import {
+  cancelRun,
+  createSession,
+  getLatestSession,
+  getProjectInfo,
+  readSourceFile,
+  saveAnalysisNote,
+  searchProjectFilesDetailed,
+  startRun,
+  subscribeRunEvents,
+} from "./api/client";
 import { AnswerPanel } from "./components/answer/AnswerPanel";
 import { ChatPanel } from "./components/chat/ChatPanel";
 import { CodeEditor } from "./components/code/CodeEditor";
@@ -23,21 +33,45 @@ export function App() {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [status, setStatus] = useState<RunStatus>("idle");
   const [runId, setRunId] = useState("");
+  const [sessionId, setSessionId] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [files, setFiles] = useState<string[]>([]);
+  const [fileTotalMatches, setFileTotalMatches] = useState(0);
+  const [fileListTruncated, setFileListTruncated] = useState(false);
   const [fileQuery, setFileQuery] = useState("");
   const [openFilePaths, setOpenFilePaths] = useState<string[]>([]);
   const [activeFile, setActiveFile] = useState<SourceFile | null>(null);
   const [highlightedRange, setHighlightedRange] = useState<HighlightedRange | undefined>();
   const [tour, setTour] = useState<TourData | null>(null);
   const [tourLoading, setTourLoading] = useState(false);
+  const [projectName, setProjectName] = useState("agentCli");
+  const [projectRepoLabel, setProjectRepoLabel] = useState("loading project...");
+  const [modelLabel, setModelLabel] = useState("loading model...");
+  const [noteStatus, setNoteStatus] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  const [notePath, setNotePath] = useState("");
   const [activeTab, setActiveTab] = useState<InspectorTab>("analysis");
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const visibleFiles = useMemo(() => files.slice(0, 200), [files]);
 
   useEffect(() => {
-    refreshFiles("");
+    (async () => {
+      try {
+        const [project, latestSession] = await Promise.all([getProjectInfo(), getLatestSession()]);
+        setProjectName(project.name || "agentCli");
+        setProjectRepoLabel(project.repoRoot || "unknown repository");
+        setModelLabel(project.model || "unknown model");
+        if (latestSession) {
+          setSessionId(latestSession);
+        } else {
+          setSessionId(await createSession());
+        }
+      } catch {
+        setErrorMessage("项目初始化失败，请刷新页面重试。");
+      }
+      await refreshFiles("");
+    })();
     return () => {
       eventSourceRef.current?.close();
     };
@@ -79,68 +113,108 @@ export function App() {
   }
 
   async function startTour() {
+    setErrorMessage("");
     setTourLoading(true);
     setTour(null);
     setActiveTab("tour");
     try {
       const resp = await fetch("/api/tour", { method: "POST" });
+      if (!resp.ok) {
+        throw new Error("tour request failed");
+      }
       const data: TourData = await resp.json();
       setTour(data);
+      if (data.warning) {
+        setErrorMessage("导览生成不完整，已展示降级内容。");
+      }
       if (data.steps.length > 0) {
         openFileByKeyLines(data.steps[0].file, data.steps[0].key_lines);
       }
     } catch {
-      // tour failed silently
+      setErrorMessage("导览生成失败，请稍后重试。");
     } finally {
       setTourLoading(false);
     }
   }
 
   async function run() {
+    setErrorMessage("");
+    setNoteStatus("idle");
+    setNotePath("");
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
     setEvents([]);
     setAnswer("");
     setStatus("running");
     setActiveTab("analysis");
     setHistory((current) => [question, ...current.filter((item) => item !== question)].slice(0, 8));
-    const nextRunId = await startRun(question);
-    setRunId(nextRunId);
-    const es = subscribeRunEvents(
-      nextRunId,
-      (parsed) => {
-        setEvents((current) => [...current, parsed]);
-        if (parsed.type === "answer_final") {
-          setAnswer(String(parsed.payload.answer || ""));
-        }
-        if (parsed.type === "file_opened") {
-          openFile(String(parsed.payload.path));
-        }
-        if (parsed.type === "line_range_read") {
-          const range = {
-            path: String(parsed.payload.path ?? ""),
-            startLine: Number(parsed.payload.start_line ?? 1),
-            endLine: Number(parsed.payload.end_line ?? parsed.payload.start_line ?? 1),
-          };
-          setHighlightedRange(range);
-          if (range.path) openFile(range.path, range);
-        }
-        if (parsed.type === "run_error") {
+    try {
+      const activeSessionId = sessionId || (await createSession());
+      setSessionId(activeSessionId);
+      const nextRun = await startRun(question, activeSessionId);
+      setRunId(nextRun.runId);
+      setSessionId(nextRun.sessionId);
+      const es = subscribeRunEvents(
+        nextRun.runId,
+        (parsed) => {
+          setEvents((current) => [...current, parsed]);
+          if (parsed.type === "answer_final") {
+            setAnswer(String(parsed.payload.answer || ""));
+          }
+          if (parsed.type === "run_finished") {
+            const statusPayload = String(parsed.payload.status ?? "finished");
+            if (statusPayload === "failed") setStatus("failed");
+            else if (statusPayload === "cancelled") setStatus("cancelled");
+            else setStatus("finished");
+          }
+          if (parsed.type === "file_opened") {
+            openFile(String(parsed.payload.path));
+          }
+          if (parsed.type === "line_range_read") {
+            const range = {
+              path: String(parsed.payload.path ?? ""),
+              startLine: Number(parsed.payload.start_line ?? 1),
+              endLine: Number(parsed.payload.end_line ?? parsed.payload.start_line ?? 1),
+            };
+            setHighlightedRange(range);
+            if (range.path) openFile(range.path, range);
+          }
+          if (parsed.type === "run_error") {
+            setErrorMessage(String(parsed.payload.error ?? "分析失败，请重试。"));
+            setStatus("failed");
+          }
+        },
+        () => setStatus((current) => (current === "failed" || current === "cancelled" ? current : "finished")),
+        () => {
+          setErrorMessage("分析连接中断，请重试。");
           setStatus("failed");
-        }
-      },
-      () => setStatus((current) => (current === "failed" ? "failed" : "finished")),
-      () => setStatus("failed"),
-    );
-    eventSourceRef.current = es;
+        },
+      );
+      eventSourceRef.current = es;
+    } catch {
+      setErrorMessage("启动分析失败，请确认会话和后端状态。");
+      setStatus("failed");
+    }
   }
 
-  function stop() {
+  async function stop() {
+    if (runId) {
+      try {
+        await cancelRun(runId);
+      } catch {
+        setErrorMessage("停止请求失败，已关闭前端订阅。");
+      }
+    }
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
-    setStatus("finished");
+    setStatus("cancelled");
   }
 
   async function refreshFiles(query = fileQuery) {
-    setFiles(await searchProjectFiles(query));
+    const result = await searchProjectFilesDetailed(query);
+    setFiles(result.matches);
+    setFileTotalMatches(result.totalMatches);
+    setFileListTruncated(result.truncated);
   }
 
   async function updateFileQuery(query: string) {
@@ -154,6 +228,18 @@ export function App() {
       startLine: evidence.startLine,
       endLine: evidence.endLine ?? evidence.startLine,
     } : undefined);
+  }
+
+  async function saveNote() {
+    if (!answer.trim()) return;
+    setNoteStatus("saving");
+    try {
+      const savedPath = await saveAnalysisNote(question, answer);
+      setNotePath(savedPath);
+      setNoteStatus("saved");
+    } catch {
+      setNoteStatus("failed");
+    }
   }
 
   const tourCompleted = tour ? tour.steps.filter((s) => openFilePaths.includes(s.file)).length : 0;
@@ -183,7 +269,13 @@ export function App() {
             <AgentTimeline events={events} status={status} />
             <EvidencePanel events={events} onOpenEvidence={openEvidence} />
             <CallGraph events={events} />
-            <AnswerPanel answer={answer} />
+            <AnswerPanel
+              answer={answer}
+              canSave={Boolean(answer.trim())}
+              noteStatus={noteStatus}
+              notePath={notePath}
+              onSaveNote={saveNote}
+            />
           </div>
         ) : tour ? (
           <div className="tabsPane">
@@ -207,9 +299,9 @@ export function App() {
 
   return (
     <WorkbenchShell
-      title="agentCli"
-      repoLabel="source-reading workbench"
-      modelLabel="deepseek-v4-pro"
+      title={projectName}
+      repoLabel={projectRepoLabel}
+      modelLabel={modelLabel}
       status={status}
       sidebar={
         <>
@@ -218,12 +310,20 @@ export function App() {
             status={status}
             history={history}
             tourLoading={tourLoading}
+            errorMessage={errorMessage}
             onQuestionChange={setQuestion}
             onRun={run}
             onStop={stop}
             onStartTour={startTour}
           />
-          <FileExplorer files={visibleFiles} query={fileQuery} onQueryChange={updateFileQuery} onOpen={openFile} />
+          <FileExplorer
+            files={visibleFiles}
+            totalMatches={fileTotalMatches}
+            truncated={fileListTruncated}
+            query={fileQuery}
+            onQueryChange={updateFileQuery}
+            onOpen={openFile}
+          />
         </>
       }
       editor={

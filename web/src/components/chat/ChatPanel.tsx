@@ -5,13 +5,24 @@ type ChatPanelProps = {
   status: RunStatus;
   history: string[];
   tourLoading: boolean;
+  errorMessage: string;
   onQuestionChange: (question: string) => void;
   onRun: () => void;
   onStop: () => void;
   onStartTour: () => void;
 };
 
-export function ChatPanel({ question, status, history, tourLoading, onQuestionChange, onRun, onStop, onStartTour }: ChatPanelProps) {
+export function ChatPanel({
+  question,
+  status,
+  history,
+  tourLoading,
+  errorMessage,
+  onQuestionChange,
+  onRun,
+  onStop,
+  onStartTour,
+}: ChatPanelProps) {
   const busy = status === "running" || tourLoading;
   const isRunning = status === "running";
 
@@ -27,11 +38,11 @@ export function ChatPanel({ question, status, history, tourLoading, onQuestionCh
         disabled={busy}
         onClick={onStartTour}
       >
-        {tourLoading ? "生成导览中..." : "Start Code Tour"}
+        {tourLoading ? "生成导览中..." : "开始代码导览"}
       </button>
 
       <div className="chatDivider">
-        <span>或者直接提问</span>
+        <span>或直接提问</span>
       </div>
 
       <textarea
@@ -54,6 +65,7 @@ export function ChatPanel({ question, status, history, tourLoading, onQuestionCh
           </button>
         )}
       </div>
+      {errorMessage ? <p className="chatError">{errorMessage}</p> : null}
       <div className="history">
         <h3>最近提问</h3>
         {history.length === 0 ? <p className="muted">还没有运行过。</p> : null}

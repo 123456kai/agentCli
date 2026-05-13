@@ -6,7 +6,7 @@ export type AgentEvent = {
   payload: Record<string, unknown>;
 };
 
-export type RunStatus = "idle" | "running" | "finished" | "failed";
+export type RunStatus = "idle" | "running" | "finished" | "failed" | "cancelled";
 
 export type SourceFile = {
   path: string;

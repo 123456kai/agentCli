@@ -6,20 +6,35 @@ export type RunResult = {
   events: AgentEvent[];
 };
 
-export async function runAnalysis(question: string): Promise<RunResult> {
+export type ProjectInfo = {
+  repoRoot: string;
+  name: string;
+  model: string;
+  fileCount: number;
+  truncated: boolean;
+};
+
+export type FileSearchResult = {
+  matches: string[];
+  totalMatches: number;
+  truncated: boolean;
+};
+
+export async function runAnalysis(question: string, sessionId: string): Promise<RunResult> {
   const events: AgentEvent[] = [];
-  const { runId, answer } = await streamRunAnalysis(question, (event) => events.push(event));
+  const { runId, answer } = await streamRunAnalysis(question, sessionId, (event) => events.push(event));
   return { runId, answer, events };
 }
 
 export async function streamRunAnalysis(
   question: string,
+  sessionId: string,
   onEvent: (event: AgentEvent) => void,
-): Promise<{ runId: string; answer: string }> {
+): Promise<{ runId: string; answer: string; sessionId: string }> {
   const response = await fetch("/api/runs", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, session_id: sessionId }),
   });
   const payload = await response.json();
   let answer = "";
@@ -56,17 +71,20 @@ export async function streamRunAnalysis(
       reject(new Error("SSE stream failed"));
     };
   });
-  return { runId: payload.run_id, answer };
+  return { runId: payload.run_id, answer, sessionId: String(payload.session_id ?? sessionId) };
 }
 
-export async function startRun(question: string): Promise<string> {
+export async function startRun(question: string, sessionId: string): Promise<{ runId: string; sessionId: string }> {
   const response = await fetch("/api/runs", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, session_id: sessionId }),
   });
   const payload = await response.json();
-  return String(payload.run_id);
+  return {
+    runId: String(payload.run_id),
+    sessionId: String(payload.session_id ?? sessionId),
+  };
 }
 
 export function subscribeRunEvents(
@@ -120,4 +138,55 @@ export async function searchProjectFiles(pattern = ""): Promise<string[]> {
   const response = await fetch(`/api/files${params}`);
   const payload = await response.json();
   return Array.isArray(payload.matches) ? payload.matches.map(String) : [];
+}
+
+export async function searchProjectFilesDetailed(pattern = ""): Promise<FileSearchResult> {
+  const params = pattern ? `?pattern=${encodeURIComponent(pattern)}` : "";
+  const response = await fetch(`/api/files${params}`);
+  const payload = await response.json();
+  return {
+    matches: Array.isArray(payload.matches) ? payload.matches.map(String) : [],
+    totalMatches: Number(payload.total_matches ?? 0),
+    truncated: Boolean(payload.truncated),
+  };
+}
+
+export async function getProjectInfo(): Promise<ProjectInfo> {
+  const response = await fetch("/api/project");
+  const payload = await response.json();
+  return {
+    repoRoot: String(payload.repo_root ?? ""),
+    name: String(payload.name ?? ""),
+    model: String(payload.model ?? ""),
+    fileCount: Number(payload.file_count ?? 0),
+    truncated: Boolean(payload.truncated),
+  };
+}
+
+export async function getLatestSession(): Promise<string | null> {
+  const response = await fetch("/api/sessions/latest");
+  const payload = await response.json();
+  const sessionId = payload.session_id;
+  if (!sessionId) return null;
+  return String(sessionId);
+}
+
+export async function createSession(): Promise<string> {
+  const response = await fetch("/api/sessions", { method: "POST" });
+  const payload = await response.json();
+  return String(payload.session_id);
+}
+
+export async function cancelRun(runId: string): Promise<void> {
+  await fetch(`/api/runs/${runId}/cancel`, { method: "POST" });
+}
+
+export async function saveAnalysisNote(question: string, answer: string): Promise<string> {
+  const response = await fetch("/api/notes", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ question, answer }),
+  });
+  const payload = await response.json();
+  return String(payload.note_path ?? "");
 }

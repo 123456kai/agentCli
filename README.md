@@ -19,7 +19,12 @@ agentcli chat --repo /path/to/repo
 
 # Save answer as a structured Markdown note
 agentcli note --repo /path/to/repo "Explain the auth flow"
+
+# Launch the local read-only web workbench
+agentcli web --repo /path/to/repo
 ```
+
+Then open `http://127.0.0.1:8765`.
 
 ## Configuration
 
@@ -111,6 +116,21 @@ agentcli note --output-dir ~/my-notes "Explain error handling"
 
 Notes are saved with structured sections: Conclusion, Key Files, Reading Order, Uncertainties. Existing notes are rotated (`note.md` → `note-1.md` → `note-2.md`) rather than overwritten.
 
+### `web` — Read-only source reading IDE
+
+```bash
+agentcli web --repo /path/to/repo
+```
+
+The web workbench provides:
+
+- project metadata (repo path, model, file count)
+- file explorer + read-only Monaco code viewer
+- timeline / evidence / call graph panels
+- interactive follow-up questions with persisted session context
+- one-click note export for current answers
+- code tour generation for onboarding
+
 ## Available Tools
 
 The agent has access to these tools when exploring a repository:
@@ -140,6 +160,13 @@ This project is intentionally focused on source reading, not code execution or r
 - trace a likely Python entry flow
 - save a reading note with evidence and open questions
 
+It intentionally does **not** provide:
+
+- file editing
+- terminal execution inside target repositories
+- git operations in target repositories
+- debugger/runtime attachment
+
 ## Common Issues
 
 **"API key not found"**: Set `DEEPSEEK_API_KEY` or `AGENTCLI_API_KEY` environment variable.
@@ -155,4 +182,9 @@ This project is intentionally focused on source reading, not code execution or r
 ```bash
 pip install -e ".[dev]"
 python -m pytest tests/ -v
+
+# Build web assets
+cd web
+npm install
+npm run build
 ```
