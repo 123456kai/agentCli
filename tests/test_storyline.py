@@ -72,8 +72,19 @@ def test_resolve_storyline_nodes_maps_to_source():
         assert isinstance(node, StorylineNode)
         assert node.file_path
         assert node.line_start > 0
+        assert node.line_end >= node.line_start, (
+            f"line_end ({node.line_end}) should be >= line_start ({node.line_start}) "
+            f"for {node.title} in {node.file_path}"
+        )
         assert node.graph_node_id
         assert node.order >= 0
+
+    # Verify that at least one node spans multiple lines (line_end > line_start)
+    multi_line_nodes = [n for n in resolved if n.line_end > n.line_start]
+    assert len(multi_line_nodes) > 0, (
+        "Expected at least one multi-line function body, "
+        f"but all {len(resolved)} nodes have line_end == line_start"
+    )
 
 
 def test_discover_storylines_skips_too_short_paths():

@@ -162,6 +162,35 @@ def discover_storylines(
     return storylines
 
 
+def _resolve_line_end(file_path: Path, line_start: int) -> int:
+    """Find the actual end line of a function/class definition.
+
+    Scans forward from line_start to find the next top-level definition
+    (no leading whitespace def/class/async def) or end of file.
+    Falls back to line_start if the file cannot be read.
+    """
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except (OSError, IOError):
+        return line_start
+
+    lines = content.splitlines()
+    if line_start > len(lines):
+        return line_start
+
+    # Scan from line_start to find the next top-level definition.
+    # line_start is 1-based, so lines[line_start] is the first line after the def.
+    for i in range(line_start, len(lines)):
+        stripped = lines[i].lstrip()
+        if stripped.startswith(("def ", "class ", "async def ")):
+            # i is 0-based, which equals the 1-based line number of the next
+            # definition.  Returning i means line_end is set to the line just
+            # before that next definition.
+            return i
+
+    return len(lines)
+
+
 def resolve_storyline_nodes(
     repo_root: Path,
     index: GraphIndex,
@@ -173,5 +202,7 @@ def resolve_storyline_nodes(
         graph_node = nodes_by_id.get(node.graph_node_id)
         if graph_node:
             node.line_start = int(graph_node["line"])
-            node.line_end = int(graph_node["line"])
+            node.line_end = _resolve_line_end(
+                repo_root / node.file_path, node.line_start
+            )
     return storyline.nodes
