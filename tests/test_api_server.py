@@ -198,3 +198,41 @@ def test_api_cancel_endpoint_marks_run_cancelled(tmp_path: Path) -> None:
     assert cancel.json()["status"] == "cancelled"
     assert "event: run_finished" in events.text
     assert '"status":"cancelled"' in events.text
+
+
+def test_graph_skeleton_endpoint_returns_nodes_edges_and_skipped_files(tmp_path: Path) -> None:
+    (tmp_path / "main.py").write_text("def main():\n    helper()\n\ndef helper():\n    pass\n", encoding="utf-8")
+    (tmp_path / "broken.py").write_text("def broken(:\n    pass\n", encoding="utf-8")
+    client = TestClient(create_app(tmp_path, adapter_factory=lambda: FakeAdapter()))
+
+    response = client.get("/api/graph/skeleton")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert any(node["id"] == "main.py::main" for node in payload["nodes"])
+    assert any(edge["source"] == "main.py::main" and edge["target"] == "main.py::helper" for edge in payload["edges"])
+    assert payload["skipped_files"] == ["broken.py"]
+
+
+def test_graph_expand_endpoint_returns_subgraph(tmp_path: Path) -> None:
+    (tmp_path / "main.py").write_text("def main():\n    helper()\n\ndef helper():\n    pass\n", encoding="utf-8")
+    client = TestClient(create_app(tmp_path, adapter_factory=lambda: FakeAdapter()))
+
+    response = client.get("/api/graph/expand", params={"node_id": "main.py::main", "depth": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["root"] == "main.py::main"
+    assert any(node["id"] == "main.py::helper" for node in payload["nodes"])
+
+
+def test_graph_node_endpoint_returns_detail(tmp_path: Path) -> None:
+    (tmp_path / "main.py").write_text("def main():\n    helper()\n\ndef helper():\n    pass\n", encoding="utf-8")
+    client = TestClient(create_app(tmp_path, adapter_factory=lambda: FakeAdapter()))
+
+    response = client.get("/api/graph/node", params={"node_id": "main.py::helper"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["node"]["id"] == "main.py::helper"
+    assert payload["incoming"][0]["source"] == "main.py::main"

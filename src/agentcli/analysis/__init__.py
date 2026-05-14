@@ -10,6 +10,7 @@ from agentcli.analysis.models import (
     ProjectMap,
     ReadingPlan,
 )
+from agentcli.analysis.graph import build_graph_index, build_skeleton_graph, expand_call_node, get_node_detail
 from agentcli.analysis.project_map import render_project_map_summary
 from agentcli.analysis.project_scanner import scan_project_map
 from agentcli.analysis.result_parser import parse_analysis_result
@@ -27,6 +28,10 @@ __all__ = [
     "OpenQuestion",
     "ProjectMap",
     "ReadingPlan",
+    "build_graph_index",
+    "build_skeleton_graph",
+    "expand_call_node",
+    "get_node_detail",
     "render_project_map_summary",
     "scan_project_map",
     "parse_analysis_result",

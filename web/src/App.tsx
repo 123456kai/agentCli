@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AgentEvent, EvidenceItem, HighlightedRange, RunStatus, SourceFile } from "./api/events";
 import {
@@ -99,6 +99,10 @@ export function App() {
     }
     openFile(path, range);
   }
+
+  const openGraphNode = useCallback((path: string, line?: number) => {
+    openFile(path, line ? { path, startLine: line, endLine: line } : undefined);
+  }, []);
 
   function closeFile(path: string) {
     setOpenFilePaths((current) => {
@@ -268,7 +272,7 @@ export function App() {
           <div className="tabsPane">
             <AgentTimeline events={events} status={status} />
             <EvidencePanel events={events} onOpenEvidence={openEvidence} />
-            <CallGraph events={events} />
+            <CallGraph onOpenFile={openGraphNode} />
             <AnswerPanel
               answer={answer}
               canSave={Boolean(answer.trim())}
