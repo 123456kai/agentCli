@@ -2,51 +2,101 @@
 
 ## 概述
 
-为 agentCli Web 工作台增加交互式调用链/依赖图可视化面板。后端基于现有 AST 分析引擎扩展，前端采用 Cytoscape.js 实现层次树图，支持节点展开/折叠、源码双向联动。
+为 agentCli Web 工作台增加一个可交互的 Python 静态调用图面板。后端复用现有 `trace.py` 的 AST 分析能力，输出稳定的图数据；前端使用 Cytoscape.js + dagre 布局渲染层次图，支持加载全局骨架、按节点展开子调用、双击跳转源码、右键打开节点操作菜单。
+
+本次目标是做一个可靠的 MVP：把现有 JSON dump 替换成可视化图，并保证后端数据模型、API、前端类型和 Monaco 打开文件能力一致。搜索、折叠、导出、源码反向联动等增强能力留到后续迭代。
 
 ## 设计决策
 
 | 维度 | 选择 | 原因 |
 |------|------|------|
-| 语言 | Python 优先，架构可插拔 | 复用现有 `trace.py` 的 AST 分析，预留 `LanguageAnalyzer` 接口 |
-| 交互 | 可展开图 | 节点可展开/折叠子调用，支持正向+反向追踪 |
-| 数据加载 | 混合模式 | 骨架预扫 <500ms，深层展开按需 BFS |
-| 布局 | 层次树 (Top-Down) | 调用层级最直观，dagre 算法内置 |
-| 图形库 | Cytoscape.js | 内置展开/折叠、dagre 布局、Canvas 渲染，开发周期最短 |
+| 语言 | Python 优先 | 当前分析能力集中在 `trace.py`，先复用已有 AST 解析，避免扩展多语言接口导致范围过大 |
+| 图数据 | 稳定唯一节点 ID + 短标签 | 全项目中可能存在同名函数，节点 ID 使用 `path::qualname`，前端展示 `label` |
+| 交互 | MVP 支持展开、选中、双击打开 | 覆盖最核心的理解代码路径场景，折叠和搜索后续再做 |
+| 数据加载 | Skeleton + expand 按需加载 | Skeleton 返回定义和直接边；expand 从指定节点按 BFS 深度返回子图 |
+| 缓存 | `create_app` 内存缓存 | 避免每个 API 请求重复扫描整个仓库；按文件路径、mtime、size 生成轻量签名失效 |
+| 布局 | dagre Top-Down | 调用层级最直观，Cytoscape 与 `cytoscape-dagre` 易集成 |
+| 错误处理 | 返回 warning/skipped_files，不中断页面 | 语法错误文件和空仓库都应可展示降级状态 |
 
-## 架构
+## MVP 架构
 
-### 后端新增 — `agentcli/analysis/graph.py`
+### 后端新增 — `src/agentcli/analysis/graph.py`
 
-三个函数，复用 `trace.py` 的 `_build_definition_index` 和 `trace_python_flow`：
+新增独立图分析模块，不改动 `trace_python_flow` 的外部行为。模块可以复用 `_build_definition_index` 的思路，但需要解决两个问题：
 
-- `build_skeleton_graph(repo_root)` → 全量扫描，返回所有函数节点 + 一层直接调用边
-- `expand_call_node(repo_root, symbol, depth)` → BFS 追踪指定函数的深层调用子图
-- `get_node_detail(repo_root, symbol)` → 返回单节点元数据（入度/出度/文件/行号）
+- `trace.py` 当前索引以短 symbol 为 key，可能覆盖同名函数；图模块应生成唯一节点 ID。
+- `trace.py` 当前静默跳过语法错误文件；图模块应返回 `skipped_files` 供 UI 提示。
 
-### API 新增 — `server.py` 三个端点
+核心函数：
 
+- `build_graph_index(repo_root)`：扫描 Python 文件，返回节点、边、跳过文件列表和辅助索引。
+- `build_skeleton_graph(repo_root)`：返回全项目节点和直接调用边。
+- `expand_call_node(repo_root, node_id, depth)`：从唯一节点 ID 出发 BFS 展开，深度限制为 1-5。
+- `get_node_detail(repo_root, node_id)`：返回单节点元数据、入边和出边。
+
+节点数据：
+
+```json
+{
+  "id": "src/agentcli/cli.py::main",
+  "label": "main",
+  "path": "src/agentcli/cli.py",
+  "line": 42,
+  "kind": "function",
+  "degree": 3
+}
 ```
+
+边数据：
+
+```json
+{
+  "id": "src/a.py::main->src/b.py::helper",
+  "source": "src/a.py::main",
+  "target": "src/b.py::helper",
+  "relation": "calls",
+  "is_cycle": false
+}
+```
+
+### API 新增 — `src/agentcli/api/server.py`
+
+在 `create_app(repo_root)` 内新增一个小型缓存对象，供三个图 API 共用：
+
+```text
 GET /api/graph/skeleton
-  → { nodes: [...], edges: [...] }
+  -> { nodes, edges, warning, skipped_files }
 
-GET /api/graph/expand?symbol=xxx&depth=3
-  → { root, nodes: [...], edges: [...] }
+GET /api/graph/expand?node_id=...&depth=3
+  -> { root, nodes, edges }
 
-GET /api/graph/node?symbol=xxx
-  → { symbol, path, line, kind, incoming: [...], outgoing: [...] }
+GET /api/graph/node?node_id=...
+  -> { node, incoming, outgoing }
 ```
 
-### 前端重构 — `CallGraph.tsx` 完整重写
+API 参数使用 `node_id`，避免与旧的短 symbol 解析混淆。为了前端 URL 安全，调用方必须 `encodeURIComponent(nodeId)`。
 
-```
+### 前端新增/修改
+
+```text
 web/src/
 ├── components/
-│   └── CallGraph.tsx          # Cytoscape 容器，替换现有 JSON dump
+│   └── CallGraph.tsx          # Cytoscape 容器和工具栏
 ├── graph/
-│   ├── useCallGraph.ts        # 图状态管理（skeleton加载 → 增量expand → merge）
-│   ├── styles.ts              # 节点/边 Cytoscape 样式定义
-│   └── interactions.ts        # 点击展开/折叠、右键菜单、Monaco联动
+│   ├── types.ts               # 与后端 schema 对齐的 TS 类型
+│   ├── useCallGraph.ts        # 加载 skeleton、expand merge、fit/refresh 状态
+│   ├── styles.ts              # Cytoscape 样式
+│   └── interactions.ts        # tap、dbltap、right-click 菜单
+└── api/
+    └── client.ts              # graph API 客户端函数
+```
+
+`App.tsx` 不直接把当前 `openFile(path, range?)` 传给图组件。新增适配函数：
+
+```ts
+function openGraphNode(path: string, line?: number) {
+  openFile(path, line ? { path, startLine: line, endLine: line } : undefined);
+}
 ```
 
 ### 节点颜色编码
@@ -54,45 +104,44 @@ web/src/
 - 蓝色矩形：method
 - 绿色矩形：function
 - 黄色矩形：class
-- 紫色圆形：external（第三方库，不可展开）
+- 紫色圆形：external（不可展开）
 - 虚线边：循环调用
-
-### 工具栏
-
-搜索节点 | 适应画布 | 力导向布局切换 | 导出 PNG/SVG
 
 ## 数据流
 
-1. 页面加载 → `GET /api/graph/skeleton` → 渲染全量骨架图（折叠态，一层可见）
-2. 用户点击节点 ⊕ → `GET /api/graph/expand` → 增量 merge，dagre 布局动画
-3. 用户双击节点 → `openFile(path, {startLine})` → Monaco 跳转函数定义行
-4. 用户右键节点 → 上下文菜单：Open in Editor / 查看详情 / 从此节点追踪
+1. 页面加载 → `GET /api/graph/skeleton` → 渲染全局骨架图。
+2. 用户右键节点选择 Expand → `GET /api/graph/expand?node_id=...&depth=3` → 增量 merge 节点和边。
+3. 用户双击节点 → `onOpenFile(path, line)` → `App.tsx` 转换为 Monaco 高亮范围。
+4. 用户点击节点 → `GET /api/graph/node?node_id=...` → 显示简要详情。
+5. 用户点击 Refresh → 清空 Cytoscape 元素并重新加载 skeleton。
 
 ## 边界情况
 
 | 场景 | 处理 |
 |------|------|
-| 无 Python 文件 | 返回空图 + warning 提示 |
-| 1000+ 函数 | 过滤孤立函数，前端 500 节点以上虚拟化渲染 |
-| 语法错误文件 | 静默跳过，附带 `skipped_files` 列表 |
-| 循环调用 (A→B→A) | visited 集合终止，虚线表示 |
-| 第三方库调用 | 标记为 external 叶子节点，不展开 |
-| 图为空 | 引导提示 "点击 Run Analysis 开始分析" |
-| expand 超时 | 5 秒超时，显示重试提示 |
+| 无 Python 文件 | 返回空图 + `warning: "no_python_files"` |
+| 语法错误文件 | 跳过该文件，`skipped_files` 返回相对路径 |
+| 同名函数 | 节点 ID 使用 `path::qualname`，展示 label 保持简洁 |
+| 未解析调用 | 标记为 `external` 叶子节点，不支持 expand |
+| 循环调用 | BFS visited 集合终止，边标记 `is_cycle: true` |
+| 节点过多 | Skeleton 首版仍返回全部节点；前端显示节点/边数量，后续再做过滤或搜索 |
+| expand 超时 | 前端 5 秒 abort，显示可重试错误 |
+| API 错误 | 客户端检查 `response.ok`，显示错误提示 |
 
-## 与竞品对比
+## 本次非目标
 
-| 维度 | agentCli | Cursor | Claude Code | Codex |
-|------|----------|--------|-------------|-------|
-| 分析方式 | AST 静态解析，确定性 | LLM 推断 | LLM 推断 | LLM 推断 |
-| 可视化 | 交互式层次树图 | 内联引用弹窗 | 无 GUI | 无 GUI |
-| 精确度 | 行级精确 | 依赖模型 | 依赖模型 | 依赖模型 |
-| 全局视角 | 全项目函数调用网络 | 仅当前文件 | 仅 grep 输出 | 仅当前文件 |
-| 离线 | AST 分析不消耗 API | 需 API | 需 API | 需 API |
+- 非 Python 语言支持。
+- 运行时调用图。
+- Git 历史变更影响分析。
+- 节点折叠/隐藏子树。
+- 搜索节点、布局切换、导出 PNG/SVG。
+- Monaco 当前光标/文件反向定位图节点。
+- 500+ 节点虚拟化或智能过滤。
 
-## 不包含（非目标）
+## 后续增强
 
-- 非 Python 语言支持（架构预留，本次不实现）
-- 运行时调用图（仅静态分析）
-- Git 历史变更影响分析
-- 自动生成文档/架构图导出为文档
+- 搜索节点并居中高亮。
+- Fit、布局切换、导出 PNG/SVG。
+- 折叠/展开子树状态。
+- 从当前 Monaco 文件或光标反向定位图节点。
+- 多语言 `LanguageAnalyzer` 插件接口。
