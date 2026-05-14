@@ -1,4 +1,5 @@
 import { AgentEvent, SourceFile } from "./events";
+import type { ExpandData, NodeDetailData, SkeletonData } from "../graph/types";
 
 export type RunResult = {
   runId: string;
@@ -189,4 +190,28 @@ export async function saveAnalysisNote(question: string, answer: string): Promis
   });
   const payload = await response.json();
   return String(payload.note_path ?? "");
+}
+
+async function readJsonResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
+  if (!response.ok) {
+    throw new Error(`${fallbackMessage}: ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+export async function fetchGraphSkeleton(signal?: AbortSignal): Promise<SkeletonData> {
+  const response = await fetch("/api/graph/skeleton", { signal });
+  return readJsonResponse<SkeletonData>(response, "Failed to load graph skeleton");
+}
+
+export async function fetchGraphExpand(nodeId: string, depth = 3, signal?: AbortSignal): Promise<ExpandData> {
+  const params = new URLSearchParams({ node_id: nodeId, depth: String(depth) });
+  const response = await fetch(`/api/graph/expand?${params.toString()}`, { signal });
+  return readJsonResponse<ExpandData>(response, "Failed to expand graph node");
+}
+
+export async function fetchGraphNode(nodeId: string, signal?: AbortSignal): Promise<NodeDetailData> {
+  const params = new URLSearchParams({ node_id: nodeId });
+  const response = await fetch(`/api/graph/node?${params.toString()}`, { signal });
+  return readJsonResponse<NodeDetailData>(response, "Failed to load graph node");
 }

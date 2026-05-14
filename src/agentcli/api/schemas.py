@@ -47,3 +47,39 @@ class TourResponse(BaseModel):
     title: str
     steps: list[TourStep]
     warning: str | None = None
+
+
+class GraphNode(BaseModel):
+    id: str
+    label: str
+    path: str
+    line: int
+    kind: str
+    degree: int = 0
+
+
+class GraphEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    relation: str = "calls"
+    is_cycle: bool = False
+
+
+class SkeletonResponse(BaseModel):
+    nodes: list[GraphNode] = []
+    edges: list[GraphEdge] = []
+    warning: str | None = None
+    skipped_files: list[str] = []
+
+
+class ExpandResponse(BaseModel):
+    root: str
+    nodes: list[GraphNode] = []
+    edges: list[GraphEdge] = []
+
+
+class NodeDetailResponse(BaseModel):
+    node: GraphNode | None = None
+    incoming: list[GraphEdge] = []
+    outgoing: list[GraphEdge] = []

@@ -12,13 +12,19 @@ from fastapi.staticfiles import StaticFiles
 
 from agentcli.agent_loop import AgentLoop
 from agentcli.analysis import parse_analysis_result
+from agentcli.analysis.graph import build_graph_index, expand_call_node, get_node_detail
 from agentcli.api.schemas import (
+    ExpandResponse,
+    GraphEdge,
+    GraphNode,
+    NodeDetailResponse,
     ProjectResponse,
     RunRequest,
     RunResponse,
     SaveNoteRequest,
     SaveNoteResponse,
     SessionResponse,
+    SkeletonResponse,
     TourResponse,
     TourStep,
 )
@@ -82,6 +88,7 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
     resolved_repo = repo_root.resolve()
     session_store = SessionStore(resolved_repo)
     runs: dict[str, "RunStream"] = {}
+    graph_cache: dict[str, object] = {"signature": None, "index": None}
     dist_index = WEB_ROOT / "dist" / "index.html"
     dist_assets = WEB_ROOT / "dist" / "assets"
     if dist_index.exists():
@@ -126,6 +133,26 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="session not found")
             return session
         return AnalysisSession.new(resolved_repo)
+
+    def _repo_graph_signature() -> tuple[tuple[str, int, int], ...]:
+        signature: list[tuple[str, int, int]] = []
+        for rel_path in enumerate_repo_files(resolved_repo):
+            if not rel_path.endswith(".py"):
+                continue
+            path = resolved_repo / rel_path
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            signature.append((rel_path, int(stat.st_mtime_ns), int(stat.st_size)))
+        return tuple(signature)
+
+    def _get_graph_index() -> dict[str, object]:
+        signature = _repo_graph_signature()
+        if graph_cache["signature"] != signature:
+            graph_cache["signature"] = signature
+            graph_cache["index"] = build_graph_index(resolved_repo)
+        return graph_cache["index"]  # type: ignore[return-value]
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
@@ -272,6 +299,35 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
                 "truncated": len(files) > FILE_LIST_LIMIT,
             }
         return search_files(resolved_repo, pattern)
+
+    @app.get("/api/graph/skeleton", response_model=SkeletonResponse)
+    def get_graph_skeleton() -> SkeletonResponse:
+        index = _get_graph_index()
+        return SkeletonResponse(
+            nodes=[GraphNode(**node) for node in index["nodes_by_id"].values()],
+            edges=[GraphEdge(**edge) for edge in index["edges"]],
+            warning=index.get("warning"),
+            skipped_files=list(index.get("skipped_files", [])),
+        )
+
+    @app.get("/api/graph/expand", response_model=ExpandResponse)
+    def get_graph_expand(node_id: str = Query(...), depth: int = Query(3, ge=1, le=5)) -> ExpandResponse:
+        result = expand_call_node(resolved_repo, node_id, depth)
+        return ExpandResponse(
+            root=str(result["root"]),
+            nodes=[GraphNode(**node) for node in result["nodes"]],
+            edges=[GraphEdge(**edge) for edge in result["edges"]],
+        )
+
+    @app.get("/api/graph/node", response_model=NodeDetailResponse)
+    def get_graph_node(node_id: str = Query(...)) -> NodeDetailResponse:
+        result = get_node_detail(resolved_repo, node_id)
+        node = result["node"]
+        return NodeDetailResponse(
+            node=GraphNode(**node) if node else None,
+            incoming=[GraphEdge(**edge) for edge in result["incoming"]],
+            outgoing=[GraphEdge(**edge) for edge in result["outgoing"]],
+        )
 
     _TOUR_PROMPT = """\
 你正在给一位第一次看这个代码库的开发者做导览。请用中文回答。
