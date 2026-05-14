@@ -87,6 +87,30 @@ def test_resolve_storyline_nodes_maps_to_source():
     )
 
 
+def test_resolve_line_end_adjacent_functions():
+    """line_end should not bleed into the next function definition."""
+    from agentcli.analysis.storyline import _resolve_line_end
+
+    tmp = Path(tempfile.mkdtemp()) / "test.py"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(
+        """\
+def foo():
+    x = 1
+    return x
+
+
+def bar():
+    y = 2
+    return y
+"""
+    )
+    # foo starts at line 2 (1-based); bar is at line 7. foo should end before bar.
+    end = _resolve_line_end(tmp, line_start=2)
+    assert end < 7, f"line_end ({end}) should be less than bar's start line (7)"
+    assert end >= 2, f"line_end ({end}) should be at least foo's start line (2)"
+
+
 def test_discover_storylines_skips_too_short_paths():
     repo_root = _make_repo(SAMPLE_FILES)
     index = build_graph_index(repo_root)

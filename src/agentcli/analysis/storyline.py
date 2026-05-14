@@ -171,7 +171,7 @@ def _resolve_line_end(file_path: Path, line_start: int) -> int:
     """
     try:
         content = file_path.read_text(encoding="utf-8")
-    except (OSError, IOError):
+    except (OSError, UnicodeDecodeError):
         return line_start
 
     lines = content.splitlines()
@@ -179,15 +179,18 @@ def _resolve_line_end(file_path: Path, line_start: int) -> int:
         return line_start
 
     # Scan from line_start to find the next top-level definition.
-    # line_start is 1-based, so lines[line_start] is the first line after the def.
+    # line_start is 1-based, so lines[line_start] is the first line after the
+    # definition line (e.g. line_start=3 starts scanning at lines[3] = line 4).
     for i in range(line_start, len(lines)):
         stripped = lines[i].lstrip()
         if stripped.startswith(("def ", "class ", "async def ")):
-            # i is 0-based, which equals the 1-based line number of the next
-            # definition.  Returning i means line_end is set to the line just
-            # before that next definition.
+            # i is the 0-based index of the next definition line.  Returning i
+            # gives the 1-based line number of the line just before that next
+            # definition (lines[i-1] has 1-based line number i), so line_end
+            # does not bleed into the next function.
             return i
 
+    # EOF: len(lines) equals the 1-based line number of the last line.
     return len(lines)
 
 
