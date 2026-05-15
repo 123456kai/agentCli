@@ -1,5 +1,12 @@
 import { AgentEvent, SourceFile } from "./events";
 import type { ExpandData, NodeDetailData, SkeletonData } from "../graph/types";
+import type {
+  StorylineListResponse,
+  StorylineDetailResponse,
+  StorylineNodeResponse,
+  StorylineGenerateResponse,
+  NodeAskResponse,
+} from "../components/coderead/types";
 
 export type RunResult = {
   runId: string;
@@ -214,4 +221,54 @@ export async function fetchGraphNode(nodeId: string, signal?: AbortSignal): Prom
   const params = new URLSearchParams({ node_id: nodeId });
   const response = await fetch(`/api/graph/node?${params.toString()}`, { signal });
   return readJsonResponse<NodeDetailData>(response, "Failed to load graph node");
+}
+
+export async function fetchStorylines(signal?: AbortSignal): Promise<StorylineListResponse> {
+  const response = await fetch("/api/storylines", { signal });
+  return readJsonResponse<StorylineListResponse>(response, "Failed to load storylines");
+}
+
+export async function fetchStorylineDetail(id: string, signal?: AbortSignal): Promise<StorylineDetailResponse> {
+  const response = await fetch(`/api/storylines/${encodeURIComponent(id)}`, { signal });
+  return readJsonResponse<StorylineDetailResponse>(response, "Failed to load storyline");
+}
+
+export async function fetchStorylineNode(
+  storylineId: string,
+  nodeId: string,
+  signal?: AbortSignal,
+): Promise<StorylineNodeResponse> {
+  const url = `/api/storylines/${encodeURIComponent(storylineId)}/nodes/${encodeURIComponent(nodeId)}`;
+  const response = await fetch(url, { signal });
+  return readJsonResponse<StorylineNodeResponse>(response, "Failed to load node");
+}
+
+export async function generateStoryline(
+  description: string,
+  signal?: AbortSignal,
+): Promise<StorylineGenerateResponse> {
+  const response = await fetch("/api/storylines/generate", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ description }),
+    signal,
+  });
+  return readJsonResponse<StorylineGenerateResponse>(response, "Failed to generate storyline");
+}
+
+export async function askAboutNode(
+  storylineId: string,
+  nodeId: string,
+  question: string,
+  history: { role: string; content: string }[] = [],
+  signal?: AbortSignal,
+): Promise<NodeAskResponse> {
+  const url = `/api/storylines/${encodeURIComponent(storylineId)}/nodes/${encodeURIComponent(nodeId)}/ask`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ question, history }),
+    signal,
+  });
+  return readJsonResponse<NodeAskResponse>(response, "Failed to ask about node");
 }

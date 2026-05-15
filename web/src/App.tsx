@@ -21,11 +21,12 @@ import { WorkbenchShell } from "./components/layout/WorkbenchShell";
 import { StatusBar } from "./components/status/StatusBar";
 import { AgentTimeline } from "./components/timeline/AgentTimeline";
 import { CallGraph } from "./components/CallGraph";
+import { CodeReadingPanel } from "./components/coderead/CodeReadingPanel";
 import { WalkthroughPanel } from "./components/tour/WalkthroughPanel";
 import { NextReadBar } from "./components/tour/NextReadBar";
 import { TourData } from "./components/tour/types";
 
-type InspectorTab = "analysis" | "tour";
+type InspectorTab = "analysis" | "tour" | "coderead";
 
 export function App() {
   const [question, setQuestion] = useState("Explain this project");
@@ -266,6 +267,12 @@ export function App() {
           导览
           {hasTour && <span className="inspectorTabBadge">{tourCompleted}/{tour!.steps.length}</span>}
         </button>
+        <button
+          className={`inspectorTab ${activeTab === "coderead" ? "inspectorTabActive" : ""}`}
+          onClick={() => setActiveTab("coderead")}
+        >
+          研读
+        </button>
       </div>
       <div className="inspectorContent">
         {activeTab === "analysis" ? (
@@ -280,6 +287,10 @@ export function App() {
               notePath={notePath}
               onSaveNote={saveNote}
             />
+          </div>
+        ) : activeTab === "coderead" ? (
+          <div className="tabsPane">
+            <CodeReadingPanel onOpenFile={openGraphNode} />
           </div>
         ) : tour ? (
           <div className="tabsPane">
