@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 from dataclasses import dataclass, field
 from collections import deque
 from pathlib import Path
 from typing import Any
 
+from agentcli.analysis.cache import NarrativeCache, make_cache_key
 from agentcli.analysis.graph import build_graph_index, GraphIndex
+
+
+@dataclass
+class NodeNarrative:
+    summary: str
+    design_notes: str
+    warnings: str | None
 
 
 @dataclass
@@ -209,3 +219,108 @@ def resolve_storyline_nodes(
                 repo_root / node.file_path, node.line_start
             )
     return storyline.nodes
+
+
+_NARRATIVE_PROMPT = """你是一位资深代码审查专家。分析以下 Python 代码段，用中文回答。
+
+## 代码
+```
+{code_snippet}
+```
+
+## 要求
+返回一个 JSON 对象（不要 markdown，不要额外文字）：
+{{
+  "summary": "这段代码做什么（1-2句话，中文）",
+  "design_notes": "为什么这样设计？使用了什么模式？有哪些值得注意的决策？（2-3句话，中文）",
+  "warnings": "潜在问题或注意事项，没有则为 null"
+}}
+"""
+
+
+def _file_content_hash(file_path: Path) -> str:
+    """Return a short SHA256 hash of file content for cache invalidation."""
+    try:
+        return hashlib.sha256(file_path.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return "unknown"
+
+
+def _read_node_source(repo_root: Path, node: dict[str, object]) -> str:
+    """Read source code around a graph node's line (up to 50 lines)."""
+    file_path = repo_root / str(node["path"])
+    try:
+        lines = file_path.read_text(encoding="utf-8").splitlines()
+        start = max(0, int(node["line"]) - 1)
+        end = min(len(lines), start + 50)
+        return "\n".join(lines[start:end])
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+async def generate_node_narrative(
+    repo_root: Path,
+    node_id: str,
+    index: GraphIndex,
+    cache: NarrativeCache | None = None,
+    adapter_factory: Any = None,
+) -> NodeNarrative:
+    """Generate AI explanation for a single graph node. Uses cache if available."""
+    nodes_by_id = index["nodes_by_id"]
+    node = nodes_by_id.get(node_id)
+    if not node:
+        return NodeNarrative(summary="(节点不存在)", design_notes="", warnings=None)
+
+    file_path = repo_root / str(node["path"])
+    content_hash = _file_content_hash(file_path) if file_path.exists() else "external"
+
+    line_start = int(node["line"])
+    line_end = int(node["line"])
+    cache_key = make_cache_key(str(node["path"]), content_hash, line_start, line_end)
+
+    if cache is not None:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return NodeNarrative(
+                summary=str(cached.get("summary", "")),
+                design_notes=str(cached.get("design_notes", "")),
+                warnings=cached.get("warnings") if cached.get("warnings") else None,
+            )
+
+    code_snippet = _read_node_source(repo_root, node)
+    prompt = _NARRATIVE_PROMPT.format(code_snippet=code_snippet)
+
+    if adapter_factory is None:
+        return _fallback_narrative(node)
+
+    try:
+        adapter = adapter_factory()
+        raw = adapter.chat_sync(prompt)
+        data = json.loads(raw.strip())
+    except Exception:
+        return _fallback_narrative(node)
+
+    narrative = NodeNarrative(
+        summary=str(data.get("summary", "")),
+        design_notes=str(data.get("design_notes", "")),
+        warnings=data.get("warnings") if data.get("warnings") else None,
+    )
+
+    if cache is not None:
+        cache.set(cache_key, {
+            "summary": narrative.summary,
+            "design_notes": narrative.design_notes,
+            "warnings": narrative.warnings,
+        })
+
+    return narrative
+
+
+def _fallback_narrative(node: dict[str, object]) -> NodeNarrative:
+    label = str(node["label"])
+    kind = str(node["kind"])
+    return NodeNarrative(
+        summary=f"{label}（{kind}）",
+        design_notes="AI 解释暂不可用，请稍后重试。",
+        warnings=None,
+    )

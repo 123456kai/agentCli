@@ -120,3 +120,44 @@ def test_discover_storylines_skips_too_short_paths():
     for s in storylines:
         assert s.node_count >= 3
         assert s.node_count <= 10
+
+
+def test_generate_node_narrative_returns_structured_result():
+    import json
+    import asyncio
+    from agentcli.analysis.storyline import generate_node_narrative, NodeNarrative
+    from agentcli.analysis.cache import NarrativeCache
+
+    repo_root = _make_repo(SAMPLE_FILES)
+    index = build_graph_index(repo_root)
+    cache_dir = Path(tempfile.mkdtemp())
+    cache = NarrativeCache(cache_dir)
+
+    # Find the "login" node
+    node_id = next(
+        nid for nid, n in index["nodes_by_id"].items()
+        if str(n["label"]) == "login"
+    )
+
+    class MockAdapter:
+        def chat_sync(self, prompt: str) -> str:
+            return json.dumps({
+                "summary": "从请求头提取 Bearer Token 并验证 JWT",
+                "design_notes": "使用中间件模式解耦认证和业务逻辑",
+                "warnings": "HS256 是对称加密，生产建议 RS256",
+            })
+
+    narrative = asyncio.run(
+        generate_node_narrative(
+            repo_root=repo_root,
+            node_id=node_id,
+            index=index,
+            cache=cache,
+            adapter_factory=lambda: MockAdapter(),
+        )
+    )
+
+    assert isinstance(narrative, NodeNarrative)
+    assert narrative.summary
+    assert narrative.design_notes
+    assert narrative.warnings is not None
