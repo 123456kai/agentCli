@@ -7,7 +7,7 @@ import { StorylineReader } from "./StorylineReader";
 import { StorylineComplete } from "./StorylineComplete";
 
 type CodeReadingPanelProps = {
-  onOpenFile: (path: string, line?: number) => void;
+  onOpenFile: (path: string, startLine: number, endLine: number) => void;
 };
 
 export function CodeReadingPanel({ onOpenFile }: CodeReadingPanelProps) {

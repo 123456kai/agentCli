@@ -105,6 +105,10 @@ export function App() {
     openFile(path, line ? { path, startLine: line, endLine: line } : undefined);
   }, []);
 
+  const openCodeReadingFile = useCallback((path: string, startLine: number, endLine: number) => {
+    openFile(path, { path, startLine, endLine });
+  }, []);
+
   function closeFile(path: string) {
     setOpenFilePaths((current) => {
       const next = current.filter((p) => p !== path);
@@ -290,7 +294,7 @@ export function App() {
           </div>
         ) : activeTab === "coderead" ? (
           <div className="tabsPane">
-            <CodeReadingPanel onOpenFile={openGraphNode} />
+            <CodeReadingPanel onOpenFile={openCodeReadingFile} />
           </div>
         ) : tour ? (
           <div className="tabsPane">
