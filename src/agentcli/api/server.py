@@ -17,6 +17,8 @@ from agentcli.api.schemas import (
     ExpandResponse,
     GraphEdge,
     GraphNode,
+    NodeAskRequest,
+    NodeAskResponse,
     NodeDetailResponse,
     ProjectResponse,
     RunRequest,
@@ -25,6 +27,13 @@ from agentcli.api.schemas import (
     SaveNoteResponse,
     SessionResponse,
     SkeletonResponse,
+    StorylineDetailResponse,
+    StorylineGenerateRequest,
+    StorylineGenerateResponse,
+    StorylineListResponse,
+    StorylineNodeResponse,
+    StorylineNodeSchema,
+    StorylineSchema,
     TourResponse,
     TourStep,
 )
@@ -328,6 +337,168 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
             incoming=[GraphEdge(**edge) for edge in result["incoming"]],
             outgoing=[GraphEdge(**edge) for edge in result["outgoing"]],
         )
+
+    # ---- Storyline endpoints ----
+
+    from agentcli.analysis.storyline import (
+        discover_storylines,
+        generate_node_narrative,
+        _read_node_source,
+        _file_content_hash,
+    )
+    from agentcli.analysis.cache import NarrativeCache, make_cache_key
+
+    _narrative_cache = NarrativeCache(resolved_repo / ".agentcli" / "storyline-cache")
+
+    def _storylines_from_index(index: dict[str, object]) -> list[dict[str, object]]:
+        raw = discover_storylines(resolved_repo, index)
+        result: list[dict[str, object]] = []
+        for s in raw:
+            result.append({
+                "id": s.id,
+                "title": s.title,
+                "description": s.description,
+                "nodes": [
+                    {
+                        "order": n.order,
+                        "title": n.title,
+                        "file_path": n.file_path,
+                        "line_start": n.line_start,
+                        "line_end": n.line_end,
+                        "graph_node_id": n.graph_node_id,
+                        "summary": n.summary,
+                        "design_notes": n.design_notes,
+                        "warnings": n.warnings,
+                    }
+                    for n in s.nodes
+                ],
+                "node_count": s.node_count,
+                "estimated_minutes": s.estimated_minutes,
+                "file_count": s.file_count,
+            })
+        return result
+
+    @app.get("/api/storylines", response_model=StorylineListResponse)
+    def list_storylines() -> StorylineListResponse:
+        index = _get_graph_index()
+        raw = _storylines_from_index(index)
+        return StorylineListResponse(
+            storylines=[StorylineSchema(**s) for s in raw]
+        )
+
+    @app.get("/api/storylines/{storyline_id}", response_model=StorylineDetailResponse)
+    def get_storyline(storyline_id: str) -> StorylineDetailResponse:
+        index = _get_graph_index()
+        raw_list = _storylines_from_index(index)
+        match = next((s for s in raw_list if s["id"] == storyline_id), None)
+        if not match:
+            raise HTTPException(status_code=404, detail="storyline not found")
+        return StorylineDetailResponse(**match)
+
+    @app.get(
+        "/api/storylines/{storyline_id}/nodes/{node_id:path}",
+        response_model=StorylineNodeResponse,
+    )
+    def get_storyline_node(storyline_id: str, node_id: str) -> StorylineNodeResponse:
+        index = _get_graph_index()
+        raw_list = _storylines_from_index(index)
+        match = next((s for s in raw_list if s["id"] == storyline_id), None)
+        if not match:
+            raise HTTPException(status_code=404, detail="storyline not found")
+
+        node_match = next(
+            (n for n in match["nodes"] if n["graph_node_id"] == node_id), None
+        )
+        if not node_match:
+            raise HTTPException(status_code=404, detail="node not found in storyline")
+
+        nodes_by_id = index["nodes_by_id"]
+        graph_node = nodes_by_id.get(node_id)
+
+        source_code = ""
+        if graph_node:
+            file_path = resolved_repo / str(graph_node["path"])
+            if file_path.exists():
+                try:
+                    lines = file_path.read_text(encoding="utf-8").splitlines()
+                    start = max(0, int(graph_node["line"]) - 1)
+                    end = min(len(lines), start + 50)
+                    source_code = "\n".join(lines[start:end])
+                except (OSError, UnicodeDecodeError):
+                    source_code = f"# Cannot read: {graph_node['path']}"
+
+        narrative: dict[str, str | None] | None = None
+        if graph_node:
+            fpath = resolved_repo / str(graph_node["path"])
+            content_hash = (
+                _file_content_hash(fpath) if fpath.exists() else "external"
+            )
+            cache_key = make_cache_key(
+                str(graph_node["path"]),
+                content_hash,
+                int(graph_node["line"]),
+                int(graph_node["line"]),
+            )
+            cached = _narrative_cache.get(cache_key)
+            if cached:
+                narrative = {
+                    "summary": str(cached.get("summary", "")),
+                    "design_notes": str(cached.get("design_notes", "")),
+                    "warnings": (
+                        cached.get("warnings") if cached.get("warnings") else None
+                    ),
+                }
+
+        return StorylineNodeResponse(
+            node=StorylineNodeSchema(**node_match),
+            source_code=source_code,
+            narrative=narrative,
+        )
+
+    @app.post("/api/storylines/generate", response_model=StorylineGenerateResponse)
+    def generate_storyline(
+        request: StorylineGenerateRequest,
+    ) -> StorylineGenerateResponse:
+        index = _get_graph_index()
+        raw_list = _storylines_from_index(index)
+        if raw_list:
+            first = raw_list[0]
+            return StorylineGenerateResponse(
+                storyline=StorylineSchema(**first),
+                status="ready",
+            )
+        raise HTTPException(status_code=400, detail="no storylines available")
+
+    @app.post(
+        "/api/storylines/{storyline_id}/nodes/{node_id:path}/ask",
+        response_model=NodeAskResponse,
+    )
+    def ask_node(
+        storyline_id: str, node_id: str, request: NodeAskRequest
+    ) -> NodeAskResponse:
+        index = _get_graph_index()
+        nodes_by_id = index["nodes_by_id"]
+        node = nodes_by_id.get(node_id)
+        if not node:
+            raise HTTPException(status_code=404, detail="node not found")
+
+        code_snippet = _read_node_source(resolved_repo, node)
+        context = (
+            f"当前代码:\n```python\n{code_snippet}\n```\n\n"
+            f"用户问题: {request.question}"
+        )
+
+        try:
+            runtime = _build_runtime(resolved_repo)
+            factory = adapter_factory or (
+                lambda: _default_adapter_factory(runtime)
+            )
+            adapter = factory()
+            answer = adapter.chat_sync(context)
+        except Exception:
+            answer = "AI 问答暂不可用，请稍后重试。"
+
+        return NodeAskResponse(answer=answer, source_refs=[])
 
     _TOUR_PROMPT = """\
 你正在给一位第一次看这个代码库的开发者做导览。请用中文回答。
