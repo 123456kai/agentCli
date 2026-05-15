@@ -83,3 +83,64 @@ class NodeDetailResponse(BaseModel):
     node: GraphNode | None = None
     incoming: list[GraphEdge] = []
     outgoing: list[GraphEdge] = []
+
+
+class StorylineNodeSchema(BaseModel):
+    order: int
+    title: str
+    file_path: str
+    line_start: int
+    line_end: int
+    graph_node_id: str
+    summary: str | None = None
+    design_notes: str | None = None
+    warnings: str | None = None
+
+
+class StorylineSchema(BaseModel):
+    id: str
+    title: str
+    description: str
+    nodes: list[StorylineNodeSchema] = []
+    node_count: int = 0
+    estimated_minutes: int = 1
+    file_count: int = 0
+
+
+class StorylineListResponse(BaseModel):
+    storylines: list[StorylineSchema]
+
+
+class StorylineDetailResponse(BaseModel):
+    id: str
+    title: str
+    description: str
+    nodes: list[StorylineNodeSchema]
+    node_count: int
+    estimated_minutes: int
+    file_count: int
+
+
+class StorylineNodeResponse(BaseModel):
+    node: StorylineNodeSchema
+    source_code: str
+    narrative: dict[str, str | None] | None = None
+
+
+class StorylineGenerateRequest(BaseModel):
+    description: str
+
+
+class StorylineGenerateResponse(BaseModel):
+    storyline: StorylineSchema
+    status: str
+
+
+class NodeAskRequest(BaseModel):
+    question: str
+    history: list[dict[str, str]] = []
+
+
+class NodeAskResponse(BaseModel):
+    answer: str
+    source_refs: list[dict[str, str]] = []
