@@ -18,6 +18,11 @@ type StorylineReaderProps = {
   onOpenFile: (path: string, startLine: number, endLine: number) => void;
 };
 
+type GuidanceOption = {
+  label: string;
+  action: "next" | "jump" | "deep";
+};
+
 export function StorylineReader({
   storyline,
   currentNode,
@@ -32,6 +37,7 @@ export function StorylineReader({
   const [nodeData, setNodeData] = useState<StorylineNodeResponse | null>(null);
   const [loadingNode, setLoadingNode] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showGuidance, setShowGuidance] = useState(false);
 
   // Track previous node id to detect node changes
   const prevNodeId = useMemo(() => currentNode.graph_node_id, [
@@ -42,6 +48,7 @@ export function StorylineReader({
   const loadNode = useCallback(async () => {
     setLoadingNode(true);
     setError(null);
+    setShowGuidance(false);
     try {
       const data = await fetchStorylineNode(storyline.id, currentNode.graph_node_id);
       setNodeData(data);
@@ -64,8 +71,57 @@ export function StorylineReader({
     return resp.answer;
   }
 
+  function handleAskSuggestion(question: string) {
+    // Scroll to Q&A section and pre-fill
+    handleAsk(question);
+  }
+
+  const nextNode = currentNodeIndex + 1 < totalNodes
+    ? storyline.nodes[currentNodeIndex + 1]
+    : null;
+
+  const guidanceOptions: GuidanceOption[] = [];
+  if (nextNode) {
+    guidanceOptions.push({
+      label: nextNode.title || "继续下一步",
+      action: "next",
+    });
+  }
+  // Add other nodes that haven't been read yet
+  const unreadNodes = storyline.nodes
+    .map((n, i) => ({ node: n, index: i }))
+    .filter(({ index }) => index > currentNodeIndex + 1)
+    .slice(0, 2);
+  for (const { node, index } of unreadNodes) {
+    guidanceOptions.push({
+      label: `跳到：${node.title || "节点 " + (index + 1)}`,
+      action: "jump",
+    });
+  }
+  guidanceOptions.push({
+    label: "深入探索当前节点",
+    action: "deep",
+  });
+
+  function handleGuidanceChoice(option: GuidanceOption) {
+    setShowGuidance(false);
+    if (option.action === "next") {
+      onAdvance();
+    } else if (option.action === "jump") {
+      const target = unreadNodes.find(
+        ({ node }) => (node.title || "") === option.label.replace(/^跳到：/, "")
+      );
+      if (target) {
+        onGoToNode(target.index);
+      }
+    }
+    // "deep" — stay on current node, focus Q&A
+  }
+
   const progressPct = ((currentNodeIndex + 1) / totalNodes) * 100;
   const isLastNode = currentNodeIndex + 1 >= totalNodes;
+
+  const nextTeaser = nodeData?.narrative?.next_teaser ?? currentNode.next_teaser;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
@@ -189,18 +245,65 @@ export function StorylineReader({
             {currentNode.title}
           </div>
 
-          {/* Narrative cards */}
+          {/* Narrative cards with suggested questions */}
           <NarrativeCards
-            narrative={nodeData?.narrative ?? null}
+            narrative={nodeData?.narrative ? { ...nodeData.narrative, next_teaser: nextTeaser } : null}
             loading={loadingNode}
             lineStart={currentNode.line_start}
             lineEnd={currentNode.line_end}
             filePath={currentNode.file_path}
+            onAskSuggestion={handleAskSuggestion}
           />
 
           {error ? (
             <p style={{ color: "#b91c1c", fontSize: 11 }}>{error}</p>
           ) : null}
+
+          {/* Guidance panel: shown after user clicks "理解了" */}
+          {showGuidance && (
+            <div style={{
+              border: "1px solid var(--accent)",
+              borderRadius: 8,
+              padding: "10px 12px",
+              background: "#f8faff",
+            }}>
+              <div style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: "var(--accent)",
+                marginBottom: 8,
+              }}>
+                这个节点理解了！接下来你想了解什么？
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {guidanceOptions.map((opt, i) => (
+                  <button
+                    key={i}
+                    onClick={() => handleGuidanceChoice(opt)}
+                    style={{
+                      textAlign: "left",
+                      padding: "6px 10px",
+                      border: `1px solid ${i === 0 ? "var(--accent)" : "var(--border)"}`,
+                      borderRadius: 6,
+                      background: i === 0 ? "#eff6ff" : "#fff",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      color: i === 0 ? "var(--accent)" : "var(--text-body)",
+                      fontWeight: i === 0 ? 600 : 400,
+                    }}
+                    type="button"
+                  >
+                    {i === 0 && "→ "}{opt.label}
+                    {opt.action === "next" && nextNode && (
+                      <span style={{ fontSize: 9, color: "var(--text-muted)", marginLeft: 6 }}>
+                        ({nextNode.file_path})
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Separator */}
           <div style={{ borderTop: "1px solid var(--border)" }} />
@@ -255,7 +358,13 @@ export function StorylineReader({
 
           <button
             className="primaryButton"
-            onClick={onAdvance}
+            onClick={() => {
+              if (isLastNode) {
+                onAdvance();
+              } else {
+                setShowGuidance(true);
+              }
+            }}
             style={{
               fontSize: 12,
               padding: "6px 16px",

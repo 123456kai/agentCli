@@ -8,12 +8,14 @@ export type StorylineNode = {
   summary: string | null;
   design_notes: string | null;
   warnings: string | null;
+  next_teaser: string | null;
 };
 
 export type Storyline = {
   id: string;
   title: string;
   description: string;
+  theme: string;
   nodes: StorylineNode[];
   node_count: number;
   estimated_minutes: number;
@@ -33,6 +35,7 @@ export type StorylineNodeResponse = {
     summary: string;
     design_notes: string;
     warnings: string | null;
+    next_teaser?: string | null;
   } | null;
 };
 

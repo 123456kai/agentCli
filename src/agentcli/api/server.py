@@ -345,19 +345,33 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
         generate_node_narrative,
         _read_node_source,
         _file_content_hash,
+        _generate_progressive_narrative,
+        _build_entry_summary,
     )
     from agentcli.analysis.cache import NarrativeCache, make_cache_key
 
     _narrative_cache = NarrativeCache(resolved_repo / ".agentcli" / "storyline-cache")
+    _storyline_cache: dict[str, object] = {"storylines": None, "signature": None}
 
-    def _storylines_from_index(index: dict[str, object]) -> list[dict[str, object]]:
-        raw = discover_storylines(resolved_repo, index)
+    def _graph_signature() -> str:
+        if graph_cache["signature"] is not None:
+            return str(graph_cache["signature"])
+        return "fresh"
+
+    def _storylines_from_index(
+        index: dict[str, object],
+        adapter_factory=None,
+    ) -> list[dict[str, object]]:
+        raw = discover_storylines(
+            resolved_repo, index, adapter_factory=adapter_factory,
+        )
         result: list[dict[str, object]] = []
         for s in raw:
             result.append({
                 "id": s.id,
                 "title": s.title,
                 "description": s.description,
+                "theme": s.theme,
                 "nodes": [
                     {
                         "order": n.order,
@@ -369,6 +383,7 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
                         "summary": n.summary,
                         "design_notes": n.design_notes,
                         "warnings": n.warnings,
+                        "next_teaser": n.next_teaser,
                     }
                     for n in s.nodes
                 ],
@@ -381,7 +396,14 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
     @app.get("/api/storylines", response_model=StorylineListResponse)
     def list_storylines() -> StorylineListResponse:
         index = _get_graph_index()
+        sig = _graph_signature()
+        if _storyline_cache["storylines"] is not None and _storyline_cache["signature"] == sig:
+            return StorylineListResponse(
+                storylines=[StorylineSchema(**s) for s in _storyline_cache["storylines"]]
+            )
         raw = _storylines_from_index(index)
+        _storyline_cache["storylines"] = raw
+        _storyline_cache["signature"] = sig
         return StorylineListResponse(
             storylines=[StorylineSchema(**s) for s in raw]
         )
@@ -394,6 +416,65 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
         if not match:
             raise HTTPException(status_code=404, detail="storyline not found")
         return StorylineDetailResponse(**match)
+
+    @app.get("/api/storylines/{storyline_id}/enhance")
+    def enhance_storyline(storyline_id: str):
+        index = _get_graph_index()
+        raw_list = _storylines_from_index(index)
+        match = next((s for s in raw_list if s["id"] == storyline_id), None)
+        if not match:
+            raise HTTPException(status_code=404, detail="storyline not found")
+
+        storyline_title = str(match["title"])
+        nodes = list(match["nodes"])
+        runtime = _build_runtime(resolved_repo)
+        factory = adapter_factory or (lambda: _default_adapter_factory(runtime))
+
+        def _iter_events():
+            yield f"data: {json.dumps({'type': 'enhancement_start', 'storyline_id': storyline_id, 'total_nodes': len(nodes)}, ensure_ascii=False)}\n\n"
+
+            prev_nodes: list[dict[str, str]] = []
+            for i, node in enumerate(nodes):
+                graph_node_id = str(node["graph_node_id"])
+                try:
+                    adapter = factory()
+                    narrative = _generate_progressive_narrative(
+                        resolved_repo,
+                        graph_node_id,
+                        index,
+                        storyline_title=storyline_title,
+                        prev_nodes=prev_nodes if prev_nodes else None,
+                        cache=_narrative_cache,
+                        adapter=adapter,
+                    )
+                    enhanced = {
+                        "graph_node_id": graph_node_id,
+                        "order": node.get("order", i),
+                        "summary": narrative.summary,
+                        "design_notes": narrative.design_notes,
+                        "warnings": narrative.warnings,
+                        "next_teaser": narrative.next_teaser,
+                    }
+                    prev_nodes.append({
+                        "role": str(node.get("title", "")),
+                        "summary": narrative.summary,
+                    })
+                except Exception as exc:
+                    enhanced = {
+                        "graph_node_id": graph_node_id,
+                        "order": node.get("order", i),
+                        "summary": node.get("summary") or "",
+                        "design_notes": node.get("design_notes") or "",
+                        "warnings": node.get("warnings"),
+                        "next_teaser": node.get("next_teaser"),
+                        "error": str(exc),
+                    }
+
+                yield f"data: {json.dumps({'type': 'node_enhanced', 'node': enhanced}, ensure_ascii=False, default=str)}\n\n"
+
+            yield f"data: {json.dumps({'type': 'enhancement_complete', 'storyline_id': storyline_id}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(_iter_events(), media_type="text/event-stream")
 
     @app.get(
         "/api/storylines/{storyline_id}/nodes/{node_id:path}",
@@ -411,6 +492,19 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
         )
         if not node_match:
             raise HTTPException(status_code=404, detail="node not found in storyline")
+
+        storyline_title = str(match.get("title", ""))
+        storyline_nodes = list(match.get("nodes", []))
+
+        # Build previous-nodes context for progressive narrative
+        prev_nodes: list[dict[str, str]] = []
+        for n in storyline_nodes:
+            if n["graph_node_id"] == node_id:
+                break
+            prev_nodes.append({
+                "role": str(n.get("title", "")),
+                "summary": str(n.get("summary", "")),
+            })
 
         nodes_by_id = index["nodes_by_id"]
         graph_node = nodes_by_id.get(node_id)
@@ -447,7 +541,38 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
                     "warnings": (
                         cached.get("warnings") if cached.get("warnings") else None
                     ),
+                    "next_teaser": (
+                        cached.get("next_teaser") if cached.get("next_teaser") else None
+                    ),
                 }
+            else:
+                # Generate narrative with progressive context
+                try:
+                    runtime = _build_runtime(resolved_repo)
+                    factory = adapter_factory or (
+                        lambda: _default_adapter_factory(runtime)
+                    )
+                    adapter = factory()
+                    node_narrative = _generate_progressive_narrative(
+                        resolved_repo, node_id, index,
+                        storyline_title=storyline_title,
+                        prev_nodes=prev_nodes if prev_nodes else None,
+                        cache=_narrative_cache,
+                        adapter=adapter,
+                    )
+                    narrative = {
+                        "summary": node_narrative.summary,
+                        "design_notes": node_narrative.design_notes,
+                        "warnings": node_narrative.warnings,
+                        "next_teaser": node_narrative.next_teaser,
+                    }
+                except Exception:
+                    narrative = {
+                        "summary": str(node_match.get("summary", "")),
+                        "design_notes": str(node_match.get("design_notes", "")),
+                        "warnings": node_match.get("warnings"),
+                        "next_teaser": node_match.get("next_teaser"),
+                    }
 
         return StorylineNodeResponse(
             node=StorylineNodeSchema(**node_match),
@@ -460,14 +585,68 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
         request: StorylineGenerateRequest,
     ) -> StorylineGenerateResponse:
         index = _get_graph_index()
-        raw_list = _storylines_from_index(index)
-        if raw_list:
-            first = raw_list[0]
-            return StorylineGenerateResponse(
-                storyline=StorylineSchema(**first),
-                status="ready",
+        entry_nodes = _build_entry_summary(index)
+        entries_json = json.dumps(entry_nodes, ensure_ascii=False, indent=2)
+
+        from agentcli.prompts.storyline import STAGE4_STORYLINE_GENERATION
+
+        prompt = STAGE4_STORYLINE_GENERATION.format(
+            entry_nodes=entries_json,
+            description=request.description,
+        )
+
+        nodes_by_id = index["nodes_by_id"]
+        storyline = None
+
+        try:
+            runtime = _build_runtime(resolved_repo)
+            factory = adapter_factory or (
+                lambda: _default_adapter_factory(runtime)
             )
-        raise HTTPException(status_code=400, detail="no storylines available")
+            adapter = factory()
+            raw = adapter.chat_sync(prompt)
+            data = json.loads(raw.strip())
+
+            nodes: list[dict[str, object]] = []
+            for ns in data.get("node_sequence", []):
+                gid = str(ns.get("graph_node_id", ""))
+                graph_node = nodes_by_id.get(gid, {})
+                nodes.append({
+                    "order": int(ns.get("order", len(nodes))),
+                    "title": str(ns.get("role_title", graph_node.get("label", ""))),
+                    "file_path": str(ns.get("file_path", graph_node.get("path", ""))),
+                    "line_start": int(graph_node.get("line", 0)),
+                    "line_end": int(graph_node.get("line", 0)),
+                    "graph_node_id": gid,
+                })
+
+            if len(nodes) >= 2:
+                import hashlib
+                sid = hashlib.sha256(request.description.encode()).hexdigest()[:12]
+                storyline = {
+                    "id": sid,
+                    "title": str(data.get("title", "自定义路径")),
+                    "description": str(data.get("description", request.description)),
+                    "theme": str(data.get("theme", "custom")),
+                    "nodes": nodes,
+                    "node_count": len(nodes),
+                    "estimated_minutes": max(1, len(nodes)),
+                    "file_count": len({n["file_path"] for n in nodes}),
+                }
+        except Exception:
+            pass
+
+        if storyline is None:
+            raw_list = _storylines_from_index(index)
+            if raw_list:
+                storyline = raw_list[0]
+            else:
+                raise HTTPException(status_code=400, detail="no storylines available")
+
+        return StorylineGenerateResponse(
+            storyline=StorylineSchema(**storyline),
+            status="ready",
+        )
 
     @app.post(
         "/api/storylines/{storyline_id}/nodes/{node_id:path}/ask",

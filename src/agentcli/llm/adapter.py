@@ -11,8 +11,43 @@ class LLMAdapter(Protocol):
     def respond(self, messages: list[dict[str, object]], tools: list[dict[str, object]]) -> dict[str, object]:
         ...
 
+    def chat_sync(self, prompt: str) -> str:
+        ...
+
 
 class DemoAdapter:
+    def chat_sync(self, prompt: str) -> str:
+        """Return a demo JSON response for testing."""
+        if "领域" in prompt or "dir_tree" in prompt:
+            return json.dumps({
+                "domains": [
+                    {"id": "api", "name": "Web API", "description": "HTTP接口", "files": ["src/agentcli/api/server.py"]},
+                    {"id": "agent", "name": "Agent引擎", "description": "Agent循环", "files": ["src/agentcli/agent_loop.py"]},
+                    {"id": "cli", "name": "CLI入口", "description": "命令行", "files": ["src/agentcli/cli.py"]},
+                ]
+            })
+        if "node_sequence" in prompt or "storylines" in prompt:
+            return json.dumps({
+                "storylines": [
+                    {
+                        "title": "Agent 循环执行流程",
+                        "description": "Agent 如何处理一个用户问题",
+                        "theme": "agent",
+                        "node_sequence": [
+                            {"order": 0, "role_title": "Agent入口", "file_path": "src/agentcli/agent_loop.py", "graph_node_id": "src/agentcli/agent_loop.py::AgentLoop.run_turn"},
+                            {"order": 1, "role_title": "消息处理循环", "file_path": "src/agentcli/agent_loop.py", "graph_node_id": "src/agentcli/agent_loop.py::AgentLoop._run_with_messages"},
+                            {"order": 2, "role_title": "事件发射", "file_path": "src/agentcli/agent_loop.py", "graph_node_id": "src/agentcli/agent_loop.py::AgentLoop._emit"},
+                        ]
+                    }
+                ]
+            })
+        return json.dumps({
+            "summary": "这段代码处理核心逻辑",
+            "design_notes": "使用了清晰的模块化设计",
+            "warnings": None,
+            "next_teaser": "接下来你会好奇数据从哪里来",
+        })
+
     def respond(self, messages: list[dict[str, object]], tools: list[dict[str, object]]) -> dict[str, object]:
         last_message = messages[-1]
         if last_message.get("role") != "tool":
@@ -33,6 +68,14 @@ class DeepSeekOpenAIAdapter:
             raise RuntimeError("The openai package is required for DeepSeek integration.")
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
+
+    def chat_sync(self, prompt: str) -> str:
+        """Send a single prompt and return the text response (no tools)."""
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content or ""
 
     def respond(self, messages: list[dict[str, object]], tools: list[dict[str, object]]) -> dict[str, object]:
         response = self.client.chat.completions.create(

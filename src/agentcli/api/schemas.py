@@ -95,12 +95,14 @@ class StorylineNodeSchema(BaseModel):
     summary: str | None = None
     design_notes: str | None = None
     warnings: str | None = None
+    next_teaser: str | None = None
 
 
 class StorylineSchema(BaseModel):
     id: str
     title: str
     description: str
+    theme: str = ""
     nodes: list[StorylineNodeSchema] = []
     node_count: int = 0
     estimated_minutes: int = 1

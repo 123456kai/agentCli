@@ -5,11 +5,13 @@ type NarrativeCardsProps = {
     summary: string;
     design_notes: string;
     warnings: string | null;
+    next_teaser?: string | null;
   } | null;
   loading: boolean;
   lineStart: number;
   lineEnd: number;
   filePath: string;
+  onAskSuggestion?: (question: string) => void;
 };
 
 type CardSection = {
@@ -20,7 +22,33 @@ type CardSection = {
   bgColor: string;
 };
 
-export function NarrativeCards({ narrative, loading, lineStart, lineEnd, filePath }: NarrativeCardsProps) {
+function buildSuggestions(narrative: NarrativeCardsProps["narrative"]): string[] {
+  if (!narrative) return [];
+  const suggestions: string[] = [];
+  if (narrative.next_teaser) {
+    suggestions.push(narrative.next_teaser);
+  }
+  if (narrative.design_notes) {
+    // Extract a follow-up question from design_notes
+    const lines = narrative.design_notes.split(/[。？\n]/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.length > 10 && trimmed.length < 80 && !trimmed.startsWith("使用")) {
+        suggestions.push(`为什么${trimmed}？`.slice(0, 80));
+        break;
+      }
+    }
+  }
+  if (suggestions.length < 2) {
+    suggestions.push("这段代码在整体架构中扮演什么角色？");
+  }
+  if (suggestions.length < 3) {
+    suggestions.push("如果这部分出错了，会影响哪些功能？");
+  }
+  return suggestions.slice(0, 3);
+}
+
+export function NarrativeCards({ narrative, loading, lineStart, lineEnd, filePath, onAskSuggestion }: NarrativeCardsProps) {
   const [openSections, setOpenSections] = useState<Set<string>>(new Set(["summary"]));
 
   function toggle(key: string) {
@@ -150,6 +178,49 @@ export function NarrativeCards({ narrative, loading, lineStart, lineEnd, filePat
           </div>
         );
       })}
+
+      {/* Suggested follow-up questions */}
+      {onAskSuggestion && (() => {
+        const suggestions = buildSuggestions(narrative);
+        if (suggestions.length === 0) return null;
+        return (
+          <div style={{ marginTop: 4 }}>
+            <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>
+              追问建议
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {suggestions.map((q, i) => (
+                <button
+                  key={i}
+                  onClick={() => onAskSuggestion(q)}
+                  style={{
+                    textAlign: "left",
+                    padding: "5px 8px",
+                    border: "1px dashed var(--border)",
+                    borderRadius: 4,
+                    background: "transparent",
+                    cursor: "pointer",
+                    fontSize: 10,
+                    color: "var(--text-muted)",
+                    transition: "border-color 0.15s, color 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = "var(--accent)";
+                    e.currentTarget.style.color = "var(--accent)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "var(--border)";
+                    e.currentTarget.style.color = "var(--text-muted)";
+                  }}
+                  type="button"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

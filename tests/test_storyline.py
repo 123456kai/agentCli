@@ -57,8 +57,8 @@ def test_discover_storylines_finds_entry_based_paths():
     storylines = discover_storylines(repo_root, index)
 
     assert len(storylines) >= 1
-    auth_storyline = [s for s in storylines if "login" in s.title.lower() or "auth" in s.title.lower()]
-    assert len(auth_storyline) >= 1
+    has_nodes = [s for s in storylines if s.node_count >= 3]
+    assert len(has_nodes) >= 1
 
 
 def test_resolve_storyline_nodes_maps_to_source():

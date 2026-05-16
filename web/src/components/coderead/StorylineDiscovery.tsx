@@ -6,6 +6,12 @@ type StorylineDiscoveryProps = {
   error: string | null;
   onSelect: (storyline: Storyline) => void;
   onRefresh: () => void;
+  enhancementState?: {
+    enhancing: boolean;
+    enhancedCount: number;
+    totalNodes: number;
+    complete: boolean;
+  };
 };
 
 export function StorylineDiscovery({
@@ -14,6 +20,7 @@ export function StorylineDiscovery({
   error,
   onSelect,
   onRefresh,
+  enhancementState,
 }: StorylineDiscoveryProps) {
   return (
     <div className="panel" style={{ display: "flex", flexDirection: "column" }}>
@@ -28,6 +35,37 @@ export function StorylineDiscovery({
           {loading ? "加载中..." : "刷新"}
         </button>
       </div>
+
+      {enhancementState?.enhancing && (
+        <div style={{
+          fontSize: 10,
+          color: "var(--text-muted)",
+          marginBottom: 8,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}>
+          <span style={{
+            display: "inline-block",
+            width: 8,
+            height: 8,
+            borderRadius: 99,
+            background: "var(--accent)",
+            animation: "pulse 1s ease-in-out infinite",
+          }} />
+          AI 正在增强节点叙事...
+          {enhancementState.enhancedCount > 0 && (
+            <span>
+              ({enhancementState.enhancedCount}/{enhancementState.totalNodes})
+            </span>
+          )}
+        </div>
+      )}
+      {enhancementState?.complete && enhancementState.enhancedCount > 0 && (
+        <div style={{ fontSize: 10, color: "#059669", marginBottom: 8 }}>
+          全部 {enhancementState.enhancedCount} 个节点已增强
+        </div>
+      )}
 
       {error ? (
         <p style={{ color: "#b91c1c", fontSize: 12 }}>{error}</p>

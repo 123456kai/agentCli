@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { Storyline, ReadingState } from "./types";
 import { fetchStorylines } from "../../api/client";
 import { StorylineDiscovery } from "./StorylineDiscovery";
 import { StorylineReader } from "./StorylineReader";
 import { StorylineComplete } from "./StorylineComplete";
+import { useSSEEnhancement, applyEnhancement } from "../../hooks/useSSEEnhancement";
 
 type CodeReadingPanelProps = {
   onOpenFile: (path: string, startLine: number, endLine: number) => void;
@@ -17,6 +18,36 @@ export function CodeReadingPanel({ onOpenFile }: CodeReadingPanelProps) {
   const [currentNodeIndex, setCurrentNodeIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // SSE enhancement: enhance the first (recommended) storyline
+  const enhanceTargetId = useMemo(
+    () => storylines.length > 0 ? storylines[0].id : null,
+    [storylines],
+  );
+
+  const onNodeEnhanced = useCallback((graphNodeId: string, enhancement: {
+    summary: string;
+    design_notes: string;
+    warnings: string | null;
+    next_teaser: string | null;
+  }) => {
+    setStorylines((prev) =>
+      applyEnhancement(prev, storylines[0]?.id ?? "", graphNodeId, enhancement),
+    );
+    // Also update active storyline if it's the enhanced one
+    setActiveStoryline((prev) => {
+      if (!prev || prev.id !== storylines[0]?.id) return prev;
+      return {
+        ...prev,
+        nodes: prev.nodes.map((n) => {
+          if (n.graph_node_id !== graphNodeId) return n;
+          return { ...n, ...enhancement };
+        }),
+      };
+    });
+  }, [storylines]);
+
+  const enhancementState = useSSEEnhancement(enhanceTargetId, onNodeEnhanced);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,6 +116,7 @@ export function CodeReadingPanel({ onOpenFile }: CodeReadingPanelProps) {
         loading={loading}
         error={error}
         onSelect={startReading}
+        enhancementState={enhancementState}
         onRefresh={() => {
           setLoading(true);
           setError(null);
