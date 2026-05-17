@@ -14,6 +14,8 @@ from agentcli.agent_loop import AgentLoop
 from agentcli.analysis import parse_analysis_result
 from agentcli.analysis.graph import build_graph_index, expand_call_node, get_node_detail
 from agentcli.api.schemas import (
+    CodeTutorStartRequest,
+    CodeTutorMessageRequest,
     ExpandResponse,
     GraphEdge,
     GraphNode,
@@ -337,6 +339,166 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
             incoming=[GraphEdge(**edge) for edge in result["incoming"]],
             outgoing=[GraphEdge(**edge) for edge in result["outgoing"]],
         )
+
+    # ---- CodeTutor endpoints ----
+
+    from agentcli.codetutor import (
+        CodeTutorSession,
+        CodeTutorContext,
+        CODETUTOR_OVERVIEW_PROMPT,
+        CODETUTOR_SYSTEM_PROMPT,
+        CODETUTOR_DIRECTION_SWITCH_PROMPT,
+    )
+    from agentcli.codetutor.context import TutorMessage
+    from agentcli.analysis.storyline import _analyze_project_domains
+
+    _codetutor_sessions: dict[str, CodeTutorSession] = {}
+
+    def _get_or_load_codetutor_session(session_id: str) -> CodeTutorSession | None:
+        if session_id in _codetutor_sessions:
+            return _codetutor_sessions[session_id]
+        session = CodeTutorSession.load(resolved_repo, session_id)
+        if session:
+            _codetutor_sessions[session_id] = session
+        return session
+
+    @app.post("/api/codetutor/start")
+    def codetutor_start(request: CodeTutorStartRequest):
+        """Start a CodeTutor session for a domain. Returns overview message."""
+        domains = _analyze_project_domains(resolved_repo, None)
+        domain = next((d for d in domains if str(d.get("id")) == request.domain_id), None)
+        if not domain:
+            raise HTTPException(status_code=404, detail="domain not found")
+
+        session = CodeTutorSession.new(
+            resolved_repo,
+            request.domain_id,
+            str(domain.get("name", "")),
+            str(domain.get("description", "")),
+        )
+        session.save_state()
+        _codetutor_sessions[session.session_id] = session
+
+        domain_files = domain.get("files", [])
+        files_str = ", ".join([str(f) for f in domain_files[:10]])
+
+        try:
+            runtime = _build_runtime(resolved_repo)
+            factory = adapter_factory or (lambda: _default_adapter_factory(runtime))
+            adapter = factory()
+            prompt = CODETUTOR_OVERVIEW_PROMPT.format(
+                domain_name=session.domain_name,
+                domain_description=session.domain_description,
+                domain_files=files_str,
+            )
+            overview_text = adapter.chat_sync(prompt)
+        except Exception:
+            overview_text = (
+                f"欢迎来到 **{session.domain_name}** 领域。{session.domain_description}\n"
+                f"涉及的核心文件包括：{files_str}。\n"
+                f"要不要我打开第一个文件，带你看看从哪里开始？"
+            )
+
+        ctx = session.get_context()
+        msg = TutorMessage(
+            role="tutor",
+            content=overview_text,
+            code_ref=None,
+            branch_id="main",
+            parent_index=-1,
+        )
+        ctx.append_message(msg)
+        ctx.checkpoint(label=f"领域入口: {session.domain_name}")
+
+        return {
+            "session_id": session.session_id,
+            "message": msg.to_dict(),
+            "breadcrumbs": ctx.get_breadcrumbs(session.domain_name),
+        }
+
+    @app.post("/api/codetutor/message")
+    def codetutor_message(request: CodeTutorMessageRequest):
+        """Process a user message and return the tutor's response."""
+        session = _get_or_load_codetutor_session(request.session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="session not found")
+
+        ctx = session.get_context()
+        index = _get_graph_index()
+        nodes_by_id = index["nodes_by_id"]
+
+        active_msgs = ctx.get_active_messages()
+        parent_index = len(active_msgs) - 1 if active_msgs else -1
+        user_msg = TutorMessage(
+            role="user",
+            content=request.message,
+            branch_id="main",
+            parent_index=parent_index,
+        )
+        ctx.append_message(user_msg)
+
+        user_text = request.message.strip()
+        is_confirm = user_text in (
+            "好", "继续", "嗯", "对", "是的", "可以", "行",
+            "ok", "OK", "yes", "go", "next",
+        )
+        is_direction_switch = any(
+            kw in user_text
+            for kw in ["看", "换", "跳", "去", "打开", "讲讲", "解释"]
+        )
+
+        try:
+            runtime = _build_runtime(resolved_repo)
+            factory = adapter_factory or (lambda: _default_adapter_factory(runtime))
+            adapter = factory()
+        except Exception:
+            fallback_msg = TutorMessage(
+                role="tutor",
+                content="AI 服务暂不可用，请稍后重试。",
+                branch_id="main",
+                parent_index=len(ctx.get_active_messages()) - 1,
+            )
+            ctx.append_message(fallback_msg)
+            return {
+                "session_id": session.session_id,
+                "message": fallback_msg.to_dict(),
+                "breadcrumbs": ctx.get_breadcrumbs(session.domain_name),
+            }
+
+        if is_direction_switch and not is_confirm:
+            response = _codetutor_handle_direction_switch(
+                user_text, session, ctx, index, adapter,
+                nodes_by_id, resolved_repo,
+            )
+        else:
+            response = _codetutor_handle_advance(
+                user_text, is_confirm, session, ctx, index, adapter,
+                nodes_by_id, resolved_repo,
+            )
+
+        tutor_msg = TutorMessage(
+            role="tutor",
+            content=response["content"],
+            code_ref=response.get("code_ref"),
+            branch_id="main",
+            parent_index=len(ctx.get_active_messages()) - 1,
+        )
+        ctx.append_message(tutor_msg)
+
+        if response.get("code_ref"):
+            cr = response["code_ref"]
+            session.current_file = str(cr.get("file_path", ""))
+            session.current_line_start = int(cr.get("line_start", 0))
+            session.current_line_end = int(cr.get("line_end", 0))
+            session.save_state()
+
+        ctx.checkpoint(label=f"反问: {session.current_file or '概括'}")
+
+        return {
+            "session_id": session.session_id,
+            "message": tutor_msg.to_dict(),
+            "breadcrumbs": ctx.get_breadcrumbs(session.domain_name),
+        }
 
     # ---- Storyline endpoints ----
 
@@ -662,10 +824,29 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="node not found")
 
         code_snippet = _read_node_source(resolved_repo, node)
-        context = (
-            f"当前代码:\n```python\n{code_snippet}\n```\n\n"
-            f"用户问题: {request.question}"
+
+        # Gather related definitions from the codebase
+        current_file = str(node.get("path", ""))
+        related_context = _gather_related_definitions(resolved_repo, code_snippet, current_file, request.question)
+
+        system_prompt = (
+            "你是一个代码阅读助手，正在帮开发者理解一段具体的源码。\n\n"
+            "规则：\n"
+            "- 优先基于上面给出的源码回答。如果附加了相关函数的源码，可以引用它们来给出更完整的解释。\n"
+            "- 回答控制在 4-8 句话，直接、精炼。\n"
+            "- 引用代码位置时直接写 文件路径:起始行-结束行（例如直接写 src/agentcli/agent_loop.py:42-56），不要用反引号或任何 Markdown 语法包裹它。它可以被自动识别为可点击链接。\n"
+            "- 不要编造代码——只引用上下文里实际存在的代码。\n"
+            "- 可以使用简短的 Markdown（代码块、加粗、列表）提升可读性，但代码块不超过 15 行。\n"
+            "- 用中文回答。"
         )
+        context = (
+            f"{system_prompt}\n\n"
+            f"当前文件: {current_file}\n"
+            f"当前代码:\n```python\n{code_snippet}\n```\n"
+        )
+        if related_context:
+            context += f"\n相关函数/类的源码（来自代码库其他位置）:\n{related_context}\n"
+        context += f"\n用户问题: {request.question}"
 
         try:
             runtime = _build_runtime(resolved_repo)
@@ -677,7 +858,8 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
         except Exception:
             answer = "AI 问答暂不可用，请稍后重试。"
 
-        return NodeAskResponse(answer=answer, source_refs=[])
+        source_refs = _extract_code_refs(answer, related_context, current_file)
+        return NodeAskResponse(answer=answer, source_refs=source_refs, debug_context=context)
 
     _TOUR_PROMPT = """\
 你正在给一位第一次看这个代码库的开发者做导览。请用中文回答。
@@ -744,5 +926,296 @@ def create_app(repo_root: Path, adapter_factory=None) -> FastAPI:
                     )
                 ],
             )
+
+    def _extract_code_refs(answer: str, related_context: str = "", current_file: str = "") -> list[dict[str, object]]:
+        """Extract code references from AI answer and related context.
+
+        Scans for patterns like `path/to/file.py:42-56` or `path/to/file.py:42`
+        and returns structured {path, line_start, line_end} dicts.
+        """
+        import re
+        refs: list[dict[str, object]] = []
+        seen: set[tuple[str, int, int]] = set()
+
+        # Pattern 1: path/to/file.py:42-56 (line range)
+        for m in re.finditer(r"([\w/\-.]+\.\w{1,6}):(\d+)-(\d+)", answer):
+            path = m.group(1)
+            start = int(m.group(2))
+            end = int(m.group(3))
+            key = (path, start, end)
+            if key not in seen:
+                seen.add(key)
+                refs.append({"path": path, "line_start": start, "line_end": end})
+
+        # Pattern 2: path/to/file.py:42 (single line)
+        for m in re.finditer(r"([\w/\-.]+\.\w{1,6}):(\d+)(?![-\d])", answer):
+            path = m.group(1)
+            line = int(m.group(2))
+            key = (path, line, line)
+            if key not in seen:
+                seen.add(key)
+                refs.append({"path": path, "line_start": line, "line_end": line})
+
+        # Pattern 3: extract from related_context (e.g. "定义于 src/.../file.py:42")
+        for m in re.finditer(r"定义于\s+([\w/\-.]+\.\w{1,6}):(\d+)", related_context):
+            path = m.group(1)
+            line = int(m.group(2))
+            key = (path, line, line)
+            if key not in seen:
+                seen.add(key)
+                refs.append({"path": path, "line_start": line, "line_end": line})
+
+        # Dedup: merge same-path refs, preferring range refs over single-line
+        merged: dict[str, dict[str, object]] = {}
+        for ref in refs:
+            p = str(ref["path"])
+            if p in merged:
+                existing = merged[p]
+                # If either is a range (start != end), keep the range; else keep existing
+                if existing["line_start"] == existing["line_end"] and ref["line_start"] != ref["line_end"]:
+                    merged[p] = ref
+            else:
+                merged[p] = ref
+
+        # If no refs found, at least include the current file context
+        if not merged and current_file:
+            merged[current_file] = {"path": current_file, "line_start": 1, "line_end": 1}
+
+        return list(merged.values())[:6]
+
+    def _gather_related_definitions(repo_root: Path, code_snippet: str, current_file: str = "", user_question: str = "") -> str:
+        """Extract referenced symbols from code, find their definitions in the repo,
+        and return formatted source code for inclusion in LLM context.
+
+        Skips definitions in the same file as the current code snippet.
+        Symbols mentioned in user_question are prioritized first.
+        """
+        import ast
+        import re
+        import textwrap
+        from agentcli.analysis.symbols import find_definitions
+
+        _BUILTINS = {
+            "print", "len", "range", "int", "str", "float", "bool", "list", "dict",
+            "set", "tuple", "type", "isinstance", "hasattr", "getattr", "setattr",
+            "open", "enumerate", "zip", "map", "filter", "sorted", "reversed",
+            "min", "max", "sum", "any", "all", "abs", "round",
+            "True", "False", "None", "self", "cls", "super", "Exception",
+            "Path", "os", "json", "re", "sys", "datetime", "time",
+        }
+
+        # Extract function-call symbols from code snippet (regex first for robustness)
+        symbols: set[str] = set()
+        for m in re.finditer(r"\b([a-z_][a-z0-9_]{2,})\s*\(", code_snippet):
+            symbols.add(m.group(1))
+        # AST pass for attribute calls (obj.method)
+        try:
+            tree = ast.parse(textwrap.dedent(code_snippet))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    symbols.add(node.func.attr)
+        except (SyntaxError, ValueError):
+            pass
+
+        # Filter builtins and private symbols (starts with _)
+        symbols = {s for s in symbols if s not in _BUILTINS and not s.startswith("_")}
+        if not symbols:
+            return ""
+
+        # Extract identifiers from user question to prioritize relevant symbols
+        question_lower = user_question.lower()
+        question_symbols: set[str] = set()
+        for m in re.finditer(r"\b([a-z_][a-z0-9_]{2,})\b", question_lower):
+            question_symbols.add(m.group(1))
+
+        MAX_CHUNKS = 5
+        current_file_normalized = current_file.replace("\\", "/")
+
+        def _priority(sym: str) -> tuple[int, int, str]:
+            # Tier 0: symbol mentioned in user question → highest priority
+            # Tier 1: symbol NOT in question
+            # Sub-tier: cross-file (1) > same-file (2) > no-match (3)
+            in_question = 0 if sym in question_symbols or sym.lower() in question_symbols else 1
+            result = find_definitions(repo_root, sym)
+            for m in result.get("matches", []):
+                path = str(m.get("path", "")).replace("\\", "/")
+                if path == current_file_normalized:
+                    return (in_question, 2, sym)
+                return (in_question, 1, sym)
+            return (in_question, 3, sym)
+
+        chunks: list[str] = []
+        for sym in sorted(symbols, key=_priority)[:15]:
+            if len(chunks) >= MAX_CHUNKS:
+                break
+            result = find_definitions(repo_root, sym)
+            matches = result.get("matches", [])
+            if not matches:
+                continue
+            for match in matches[:1]:
+                match_path = str(match.get("path", "")).replace("\\", "/")
+                if match_path == current_file_normalized:
+                    continue
+                fpath = repo_root / str(match.get("path", ""))
+                if not fpath.exists():
+                    continue
+                try:
+                    lines = fpath.read_text(encoding="utf-8").splitlines()
+                except (UnicodeDecodeError, OSError):
+                    continue
+                line_no = int(match.get("line", 1))
+                start = max(0, line_no - 1)
+                end = min(len(lines), start + 40)
+                snippet = "\n".join(
+                    f"{start + i + 1}: {ln}"
+                    for i, ln in enumerate(lines[start:end])
+                )
+                kind = match.get("kind", "function")
+                chunks.append(
+                    f"### {kind} `{sym}` 定义于 {match.get('path', '')}:{line_no}\n"
+                    f"```python\n{snippet}\n```"
+                )
+
+        return "\n\n".join(chunks)
+
+    def _codetutor_handle_advance(
+        user_text: str,
+        is_confirm: bool,
+        session: CodeTutorSession,
+        ctx: CodeTutorContext,
+        index: dict,
+        adapter,
+        nodes_by_id: dict,
+        repo_root: Path,
+    ) -> dict:
+        """Handle confirm/advance or free-form question from user."""
+        from agentcli.analysis.storyline import _read_node_source, _resolve_line_end
+
+        visited = ctx.get_visited_nodes()
+        breadcrumbs = ctx.get_breadcrumbs(session.domain_name)
+
+        last_code_ref = None
+        for m in reversed(ctx.get_active_messages()):
+            if m.role == "tutor" and m.code_ref:
+                last_code_ref = m.code_ref
+                break
+
+        next_candidates: list[dict[str, object]] = []
+        if last_code_ref:
+            node_id = str(last_code_ref.get("graph_node_id", ""))
+            edges = index["edges"]
+            for edge in edges:
+                if str(edge["source"]) == node_id:
+                    target = nodes_by_id.get(str(edge["target"]))
+                    if target and str(target.get("kind")) != "external":
+                        next_candidates.append({
+                            "node_id": str(edge["target"]),
+                            "label": str(target.get("label", "")),
+                            "path": str(target.get("path", "")),
+                        })
+                    if len(next_candidates) >= 5:
+                        break
+
+        if is_confirm and last_code_ref and next_candidates:
+            target = next_candidates[0]
+            node = nodes_by_id.get(str(target["node_id"]))
+            if node:
+                file_path = repo_root / str(node["path"])
+                line_start = int(node["line"])
+                code = _read_node_source(repo_root, node)
+                prompt = CODETUTOR_SYSTEM_PROMPT.format(
+                    domain_name=session.domain_name,
+                    domain_description=session.domain_description,
+                    file_path=str(node["path"]),
+                    line_start=line_start,
+                    line_end=line_start,
+                    visited_summary="\n".join(
+                        [f"- {v['node']}: {v['summary']}" for v in visited]
+                    ),
+                    breadcrumbs=breadcrumbs,
+                    code_snippet=code,
+                )
+                raw = adapter.chat_sync(prompt)
+                return {
+                    "content": raw.strip(),
+                    "code_ref": {
+                        "file_path": str(node["path"]),
+                        "line_start": line_start,
+                        "line_end": _resolve_line_end(file_path, line_start),
+                        "graph_node_id": str(node["id"]),
+                    },
+                }
+
+        prompt = (
+            f"你是一位代码导游。学生正在阅读\"{session.domain_name}\"领域的代码。\n\n"
+            f"当前路径: {breadcrumbs}\n\n"
+            f"学生说: \"{user_text}\"\n\n"
+            f"请直接回答问题，如果学生是在提问代码相关的具体问题，给出简洁的解答（2-4句话）。"
+            f"结尾反问学生是否要继续原来的方向。\n\n"
+            f"只返回纯文本。"
+        )
+        raw = adapter.chat_sync(prompt)
+        return {"content": raw.strip(), "code_ref": None}
+
+    def _codetutor_handle_direction_switch(
+        user_text: str,
+        session: CodeTutorSession,
+        ctx: CodeTutorContext,
+        index: dict,
+        adapter,
+        nodes_by_id: dict,
+        repo_root: Path,
+    ) -> dict:
+        """Handle user direction switch (e.g. '我想看XXX')."""
+        from agentcli.analysis.storyline import _read_node_source, _resolve_line_end
+
+        visited = ctx.get_visited_nodes()
+        breadcrumbs = ctx.get_breadcrumbs(session.domain_name)
+
+        available: list[dict[str, object]] = []
+        for v in visited[-8:]:
+            nid = v.get("node", "")
+            if nid in nodes_by_id:
+                available.append({
+                    "node_id": nid,
+                    "label": str(nodes_by_id[nid].get("label", "")),
+                    "path": str(nodes_by_id[nid].get("path", "")),
+                })
+        if len(available) < 5:
+            for nid, node in list(nodes_by_id.items())[:30]:
+                if str(node.get("kind")) != "external":
+                    available.append({
+                        "node_id": nid,
+                        "label": str(node.get("label", "")),
+                        "path": str(node.get("path", "")),
+                    })
+
+        prompt = CODETUTOR_DIRECTION_SWITCH_PROMPT.format(
+            breadcrumbs=breadcrumbs,
+            visited_summary="\n".join(
+                [f"- {v['node']}: {v['summary']}" for v in visited]
+            ),
+            user_message=user_text,
+            available_nodes=json.dumps(available, ensure_ascii=False, indent=2),
+        )
+        raw = adapter.chat_sync(prompt)
+
+        code_ref = None
+        content = raw.strip()
+        if content.startswith("CODE_REF:"):
+            lines = content.split("\n", 1)
+            try:
+                code_ref = json.loads(lines[0][9:].strip())
+            except json.JSONDecodeError:
+                pass
+            content = lines[1].strip() if len(lines) > 1 else content
+
+        if code_ref:
+            fpath = repo_root / str(code_ref.get("file_path", ""))
+            code_ref["line_end"] = _resolve_line_end(
+                fpath, int(code_ref.get("line_start", 0))
+            )
+
+        return {"content": content, "code_ref": code_ref}
 
     return app

@@ -14,17 +14,27 @@ def build_runtime(
     base_url: str | None = None,
     max_steps: int | None = None,
     read_max_lines: int | None = None,
+    api_key: str | None = None,
 ) -> RuntimeState:
+    from agentcli.config import resolve_config
+
     resolved = repo_root.resolve()
     config = RuntimeConfig(repo_root=resolved)
 
-    # DEEPSEEK_* env vars remain for backward compatibility
-    api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("AGENTCLI_API_KEY")
+    # API key priority: param > DEEPSEEK_API_KEY env > AGENTCLI_API_KEY env > config file
+    resolved_api_key = (
+        api_key
+        or os.environ.get("DEEPSEEK_API_KEY")
+        or os.environ.get("AGENTCLI_API_KEY")
+    )
+    if not resolved_api_key:
+        resolved_api_key = resolve_config(repo_root).api_key
+
     env_model = os.environ.get("DEEPSEEK_MODEL") or os.environ.get("AGENTCLI_MODEL")
     env_base_url = os.environ.get("DEEPSEEK_BASE_URL") or os.environ.get("AGENTCLI_BASE_URL")
 
     llm = LLMConfig(
-        api_key=api_key,
+        api_key=resolved_api_key,
         base_url=base_url or env_base_url or "https://api.deepseek.com",
         model=model or env_model or "deepseek-v4-flash",
     )

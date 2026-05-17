@@ -145,4 +145,36 @@ class NodeAskRequest(BaseModel):
 
 class NodeAskResponse(BaseModel):
     answer: str
-    source_refs: list[dict[str, str]] = []
+    source_refs: list[dict[str, object]] = []
+    debug_context: str = ""  # temporary: full context sent to LLM
+
+
+# ── CodeTutor schemas ──
+
+
+class CodeTutorStartRequest(BaseModel):
+    domain_id: str
+
+
+class CodeTutorMessageRequest(BaseModel):
+    session_id: str
+    message: str
+
+
+class CodeTutorCodeRef(BaseModel):
+    file_path: str
+    line_start: int
+    line_end: int
+    graph_node_id: str
+
+
+class CodeTutorMessageResponse(BaseModel):
+    session_id: str
+    message: dict[str, object]
+    breadcrumbs: str = ""
+
+
+class CodeTutorSessionEntry(BaseModel):
+    session_id: str
+    domain_name: str
+    updated_at: str

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class AgentCliConfig(BaseModel):
+    api_key: str = ""
     model: str = "deepseek-v4-flash"
     base_url: str = "https://api.deepseek.com"
     max_steps: int = Field(default=50, ge=1, le=100)
@@ -29,6 +30,7 @@ def _env_overrides() -> dict[str, object]:
     """Return only the config keys that have corresponding env vars set."""
     overrides: dict[str, object] = {}
     mapping = {
+        "AGENTCLI_API_KEY": ("api_key", str),
         "AGENTCLI_MODEL": ("model", str),
         "AGENTCLI_BASE_URL": ("base_url", str),
         "AGENTCLI_MAX_STEPS": ("max_steps", int),

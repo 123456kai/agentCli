@@ -38,6 +38,7 @@ export function StorylineReader({
   const [loadingNode, setLoadingNode] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showGuidance, setShowGuidance] = useState(false);
+  const [prefillQuestion, setPrefillQuestion] = useState("");
 
   // Track previous node id to detect node changes
   const prevNodeId = useMemo(() => currentNode.graph_node_id, [
@@ -66,14 +67,13 @@ export function StorylineReader({
     loadNode();
   }, [loadNode]);
 
-  async function handleAsk(question: string): Promise<string> {
+  async function handleAsk(question: string): Promise<{answer: string, sourceRefs: {path: string, line_start: number, line_end: number}[]}> {
     const resp = await askAboutNode(storyline.id, currentNode.graph_node_id, question);
-    return resp.answer;
+    return { answer: resp.answer, sourceRefs: resp.source_refs as {path: string, line_start: number, line_end: number}[] };
   }
 
   function handleAskSuggestion(question: string) {
-    // Scroll to Q&A section and pre-fill
-    handleAsk(question);
+    setPrefillQuestion(question);
   }
 
   const nextNode = currentNodeIndex + 1 < totalNodes
@@ -252,7 +252,7 @@ export function StorylineReader({
             lineStart={currentNode.line_start}
             lineEnd={currentNode.line_end}
             filePath={currentNode.file_path}
-            onAskSuggestion={handleAskSuggestion}
+            onFillInput={handleAskSuggestion}
           />
 
           {error ? (
@@ -311,8 +311,14 @@ export function StorylineReader({
           {/* Q&A */}
           <NodeQA
             onAsk={handleAsk}
+            onOpenFile={onOpenFile}
             nodeContext={currentNode.title}
             key={prevNodeId}
+            prefillQuestion={prefillQuestion}
+            onPrefillConsumed={() => setPrefillQuestion("")}
+            currentFilePath={currentNode.file_path}
+            currentLineStart={currentNode.line_start}
+            currentLineEnd={currentNode.line_end}
           />
         </div>
       </div>

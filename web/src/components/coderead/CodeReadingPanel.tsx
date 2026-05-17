@@ -5,6 +5,7 @@ import { fetchStorylines } from "../../api/client";
 import { StorylineDiscovery } from "./StorylineDiscovery";
 import { StorylineReader } from "./StorylineReader";
 import { StorylineComplete } from "./StorylineComplete";
+import { CodeTutorChat } from "./CodeTutorChat";
 import { useSSEEnhancement, applyEnhancement } from "../../hooks/useSSEEnhancement";
 
 type CodeReadingPanelProps = {
@@ -18,6 +19,7 @@ export function CodeReadingPanel({ onOpenFile }: CodeReadingPanelProps) {
   const [currentNodeIndex, setCurrentNodeIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tutorDomain, setTutorDomain] = useState<{id: string; name: string} | null>(null);
 
   // SSE enhancement: enhance the first (recommended) storyline
   const enhanceTargetId = useMemo(
@@ -77,6 +79,11 @@ export function CodeReadingPanel({ onOpenFile }: CodeReadingPanelProps) {
     setViewState("reading");
   }, []);
 
+  const startTutor = useCallback((domainId: string, domainName: string) => {
+    setTutorDomain({ id: domainId, name: domainName });
+    setViewState("tutor");
+  }, []);
+
   const advanceNode = useCallback(() => {
     if (!activeStoryline) return;
     const nextIdx = currentNodeIndex + 1;
@@ -116,6 +123,7 @@ export function CodeReadingPanel({ onOpenFile }: CodeReadingPanelProps) {
         loading={loading}
         error={error}
         onSelect={startReading}
+        onStartTutor={startTutor}
         enhancementState={enhancementState}
         onRefresh={() => {
           setLoading(true);
@@ -157,6 +165,20 @@ export function CodeReadingPanel({ onOpenFile }: CodeReadingPanelProps) {
         onReplay={() => {
           setCurrentNodeIndex(0);
           setViewState("reading");
+        }}
+      />
+    );
+  }
+
+  if (viewState === "tutor" && tutorDomain) {
+    return (
+      <CodeTutorChat
+        domainId={tutorDomain.id}
+        domainName={tutorDomain.name}
+        onOpenFile={onOpenFile}
+        onBack={() => {
+          setViewState("discovery");
+          setTutorDomain(null);
         }}
       />
     );

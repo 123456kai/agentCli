@@ -12,6 +12,7 @@ type NarrativeCardsProps = {
   lineEnd: number;
   filePath: string;
   onAskSuggestion?: (question: string) => void;
+  onFillInput?: (question: string) => void;
 };
 
 type CardSection = {
@@ -48,7 +49,7 @@ function buildSuggestions(narrative: NarrativeCardsProps["narrative"]): string[]
   return suggestions.slice(0, 3);
 }
 
-export function NarrativeCards({ narrative, loading, lineStart, lineEnd, filePath, onAskSuggestion }: NarrativeCardsProps) {
+export function NarrativeCards({ narrative, loading, lineStart, lineEnd, filePath, onAskSuggestion, onFillInput }: NarrativeCardsProps) {
   const [openSections, setOpenSections] = useState<Set<string>>(new Set(["summary"]));
 
   function toggle(key: string) {
@@ -180,19 +181,26 @@ export function NarrativeCards({ narrative, loading, lineStart, lineEnd, filePat
       })}
 
       {/* Suggested follow-up questions */}
-      {onAskSuggestion && (() => {
+      {(onAskSuggestion || onFillInput) && (() => {
         const suggestions = buildSuggestions(narrative);
         if (suggestions.length === 0) return null;
+        const handleClick = (q: string) => {
+          if (onFillInput) {
+            onFillInput(q);
+          } else {
+            onAskSuggestion?.(q);
+          }
+        };
         return (
           <div style={{ marginTop: 4 }}>
             <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>
-              追问建议
+              追问建议 · 点击填入输入框
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {suggestions.map((q, i) => (
                 <button
                   key={i}
-                  onClick={() => onAskSuggestion(q)}
+                  onClick={() => handleClick(q)}
                   style={{
                     textAlign: "left",
                     padding: "5px 8px",

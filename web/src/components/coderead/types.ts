@@ -46,7 +46,38 @@ export type StorylineGenerateResponse = {
 
 export type NodeAskResponse = {
   answer: string;
-  source_refs: { path: string; line: number }[];
+  source_refs: { path: string; line_start: number; line_end: number }[];
 };
 
-export type ReadingState = "discovery" | "reading" | "complete";
+export type ReadingState = "discovery" | "reading" | "complete" | "tutor";
+
+// ── CodeTutor types ──
+
+export type TutorCodeRef = {
+  file_path: string;
+  line_start: number;
+  line_end: number;
+  graph_node_id: string;
+};
+
+export type TutorMessage = {
+  role: "tutor" | "user";
+  content: string;
+  code_ref: TutorCodeRef | null;
+  branch_id: string;
+  parent_index: number;
+  active: boolean;
+  timestamp: string;
+};
+
+export type CodeTutorStartResponse = {
+  session_id: string;
+  message: TutorMessage;
+  breadcrumbs: string;
+};
+
+export type CodeTutorMessageResponse = {
+  session_id: string;
+  message: TutorMessage;
+  breadcrumbs: string;
+};

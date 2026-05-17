@@ -6,6 +6,7 @@ type StorylineDiscoveryProps = {
   error: string | null;
   onSelect: (storyline: Storyline) => void;
   onRefresh: () => void;
+  onStartTutor?: (domainId: string, domainName: string) => void;
   enhancementState?: {
     enhancing: boolean;
     enhancedCount: number;
@@ -20,6 +21,7 @@ export function StorylineDiscovery({
   error,
   onSelect,
   onRefresh,
+  onStartTutor,
   enhancementState,
 }: StorylineDiscoveryProps) {
   return (
@@ -165,6 +167,29 @@ export function StorylineDiscovery({
                   </span>
                 )}
               </div>
+              {/* Tutor mode button */}
+              {onStartTutor && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onStartTutor(s.theme || s.id, s.title);
+                  }}
+                  style={{
+                    marginTop: 8,
+                    padding: "4px 10px",
+                    fontSize: 11,
+                    color: "#7c3aed",
+                    background: "#f5f3ff",
+                    border: "1px solid #ddd6fe",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    width: "100%",
+                    textAlign: "center",
+                  }}
+                >
+                  对话模式 — AI 导游反问引导
+                </button>
+              )}
             </button>
           ))}
         </div>

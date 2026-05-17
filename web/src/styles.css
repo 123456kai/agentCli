@@ -39,7 +39,7 @@ input {
   min-height: 100vh;
   display: grid;
   grid-template-rows: 44px minmax(0, 1fr) 28px;
-  grid-template-columns: 300px minmax(420px, 1fr) 380px;
+  grid-template-columns: 280px minmax(380px, 1fr) 480px;
   grid-template-areas:
     "topbar topbar topbar"
     "sidebar editor inspector"
@@ -387,11 +387,13 @@ input {
 }
 
 .agentLineHighlight {
-  background: rgba(37, 99, 235, 0.12);
+  background: rgba(37, 99, 235, 0.18);
+  border-left: 3px solid var(--accent);
 }
 
 .agentLineGlyph {
   background: var(--accent);
+  width: 4px !important;
 }
 
 /* ── Inspector Tab Bar ────────────────────── */

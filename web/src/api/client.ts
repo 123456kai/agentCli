@@ -256,6 +256,35 @@ export async function generateStoryline(
   return readJsonResponse<StorylineGenerateResponse>(response, "Failed to generate storyline");
 }
 
+import type {
+  CodeTutorStartResponse,
+  CodeTutorMessageResponse,
+} from "../components/coderead/types";
+
+export async function startTutorSession(domainId: string, signal?: AbortSignal): Promise<CodeTutorStartResponse> {
+  const response = await fetch("/api/codetutor/start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ domain_id: domainId }),
+    signal,
+  });
+  return readJsonResponse<CodeTutorStartResponse>(response, "Failed to start tutor session");
+}
+
+export async function sendTutorMessage(
+  sessionId: string,
+  message: string,
+  signal?: AbortSignal,
+): Promise<CodeTutorMessageResponse> {
+  const response = await fetch("/api/codetutor/message", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, message }),
+    signal,
+  });
+  return readJsonResponse<CodeTutorMessageResponse>(response, "Failed to send tutor message");
+}
+
 export async function askAboutNode(
   storylineId: string,
   nodeId: string,
